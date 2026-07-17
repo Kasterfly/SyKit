@@ -1,0 +1,10 @@
+def print_help():
+    print("Usage: python SyKit <command>")
+    print("Commands operate on the current working directory.")
+    print("Commands:")
+    print("  init   Create src/sykit configuration and a minimal starter app")
+    print("  build [--dev]  Generate endpoints and compile the production")
+    print("                 application; --dev also runs the built app")
+    print("  package <add|remove|list|diff>  Manage packages that extend SyKit")
+    print("  version  Show the SyKit source version")
+    print("  help   Show this help")

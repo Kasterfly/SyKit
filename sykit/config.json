@@ -1,0 +1,21 @@
+{
+    "frontend-packages": {},
+    "workers": 1,
+    "endpoints": "/api/",
+    "host-ip": "127.0.0.1",
+    "host-port": 8000,
+    "allowed-hosts": ["127.0.0.1", "localhost", "::1"],
+    "max-request-bytes": 1048576,
+    "cache-svelte": true,
+    "session-https-only": false,
+    "use-dotenv": false,
+    "sykit-folder-path": "",
+
+    "default-perms": {},
+    "default-CORS": [],
+    "default-limits": {
+        "per-session": -1,
+        "site-wide": -1,
+        "per-worker": -1
+    }
+}
