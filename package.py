@@ -153,6 +153,12 @@ class Change:
     after: bytes | None
 
 
+def _require_clean_text(value: str, origin: str) -> None:
+    """Reject terminal control characters (C0, DEL, C1) in printed metadata."""
+    if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
+        raise PackageError(f"{origin} may not contain control characters.")
+
+
 def _load_manifest(package_dir: Path) -> Manifest:
     manifest_path = package_dir / MANIFEST_NAME
     if not manifest_path.is_file():
@@ -168,6 +174,8 @@ def _load_manifest(package_dir: Path) -> Manifest:
     desc = value.get("desc", "")
     if not isinstance(name, str) or not isinstance(desc, str):
         raise PackageError(f'{manifest_path}: "name" and "desc" must be strings.')
+    _require_clean_text(name, f'{manifest_path}: "name"')
+    _require_clean_text(desc, f'{manifest_path}: "desc"')
     requires = value.get("package-req", [])
     if not isinstance(requires, list):
         raise PackageError(
@@ -197,6 +205,8 @@ def _load_manifest(package_dir: Path) -> Manifest:
             f'{manifest_path}: "credit" must be a string or a list of '
             "non-empty strings."
         )
+    for entry in credit:
+        _require_clean_text(entry, f'{manifest_path}: "credit"')
     return Manifest(
         package_id,
         name,

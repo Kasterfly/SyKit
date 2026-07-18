@@ -38,12 +38,14 @@ python SyKit package diff <id or *>          Show what a package changed
      letter or digit). IDs are matched without regard to case and may not use
      filesystem or SyKit metadata names such as `CON`, `index.json`, or
      `authors.md`. This is the name used by `remove` and `diff`.
-   - `name`, `desc` **optional**, shown by `list`.
+   - `name`, `desc` **optional**, shown by `list`. Printed metadata may not
+     contain terminal control characters.
    - `package-req` **optional**, package ids that must already be installed
      before this one can be added.
    - `credit` **optional**, a string or list of strings naming the package's
-     authors. While the package is installed, they are listed in
-     `.packages/authors.md` (removed again when no credited package remains).
+     authors. Values may not contain terminal control characters. While the
+     package is installed, they are listed in `.packages/authors.md` (removed
+     again when no credited package remains).
 
 3. Create `add/`, `edit/` and/or `remove/` folders inside it (only the ones
    you need). A `README`/`LICENSE` and hidden files are ignored; anything

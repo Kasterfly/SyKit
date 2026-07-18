@@ -8,6 +8,8 @@
     "max-request-bytes": 1048576,
     "cache-svelte": true,
     "session-https-only": false,
+    "session-max-age": 1209600,
+    "content-security-policy": "",
     "use-dotenv": false,
     "sykit-folder-path": "",
 
@@ -16,6 +18,7 @@
     "default-limits": {
         "per-session": -1,
         "site-wide": -1,
+        "per-client": -1,
         "per-worker": -1
     }
 }

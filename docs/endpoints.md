@@ -105,12 +105,22 @@ Per-endpoint allowed origins, overriding `default-CORS` from the config.
 ### `@limits(...)`
 
 ```python
-@limits({"per-session": "10s", "site-wide": 1000})
+@limits({"per-client": "5m", "per-session": "10s", "site-wide": 1000})
 ```
 
-Request-rate caps. Keys: `per-session`, `site-wide`, `per-worker`. Values are
-a count plus window (`10s`, `10m`, `10hr`) a bare number means per minute,
-and `-1` means unlimited.
+Request-rate caps support four scopes:
+
+- `per-client`: one shared count for each client address seen by the ASGI
+  server. Use this for login and abuse protection that must survive cookie
+  resets. Clients behind one reverse proxy share a bucket unless Uvicorn is
+  launched with proxy headers enabled for that trusted proxy.
+- `per-session`: one count per signed session cookie. A client can reset this
+  scope by clearing cookies.
+- `site-wide`: one count shared by all workers and clients.
+- `per-worker`: one in-memory count in each server worker.
+
+Values are a count plus window (`10s`, `10m`, `10hr`), a bare number means per
+minute, and `-1` means unlimited.
 
 ## Session helpers
 

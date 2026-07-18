@@ -28,6 +28,7 @@ STAGING_DIR = Path(".__sykit_built_tmp__")
 BACKUP_DIR = Path(".__sykit_built_backup__")
 ENV_PATH = Path(".env")
 ENV_EXAMPLE_PATH = Path(".env.example")
+GITIGNORE_PATH = Path(".gitignore")
 TOOL_DIR = Path(__file__).resolve().parent
 SOURCE_FILES_DIR = TOOL_DIR / "files"
 FRONTEND_BUILD_DIR = SOURCE_FILES_DIR / "frontend-build"
@@ -41,7 +42,7 @@ DECORATOR_METHODS = {
 }
 CLIENT_DECORATORS = {"expose", "raw"}
 INJECTED_PARAMETERS = {"session", "request"}
-LIMIT_KEYS = {"per-session", "site-wide", "per-worker"}
+LIMIT_KEYS = {"per-client", "per-session", "site-wide", "per-worker"}
 LIMIT_WINDOWS = {"s": 1, "m": 60, "hr": 3600}
 IGNORED_SOURCE_DIRS = {
     ".git",
@@ -65,6 +66,7 @@ RESERVED_MODULE_ROOTS = frozenset(sys.stdlib_module_names) | {
     "app",
     "click",
     "core",
+    "dotenv",
     "h11",
     "idna",
     "itsdangerous",
@@ -1153,13 +1155,34 @@ def _check_dotenv_installed() -> None:
 
 
 def _ensure_env_files() -> None:
-    if ENV_PATH.exists():
+    if not ENV_PATH.exists():
+        if not ENV_EXAMPLE_PATH.exists():
+            shutil.copy2(SOURCE_FILES_DIR / ".env.example", ENV_EXAMPLE_PATH)
+            print(f"Created {ENV_EXAMPLE_PATH}.")
+        shutil.copy2(ENV_EXAMPLE_PATH, ENV_PATH)
+        if os.name == "posix":
+            os.chmod(ENV_PATH, 0o600)
+        print(f"Created {ENV_PATH} from {ENV_EXAMPLE_PATH}.")
+    _ensure_gitignore_env()
+
+
+def _ensure_gitignore_env() -> None:
+    try:
+        existing = (
+            GITIGNORE_PATH.read_text(encoding="utf-8")
+            if GITIGNORE_PATH.is_file()
+            else ""
+        )
+    except OSError:
         return
-    if not ENV_EXAMPLE_PATH.exists():
-        shutil.copy2(SOURCE_FILES_DIR / ".env.example", ENV_EXAMPLE_PATH)
-        print(f"Created {ENV_EXAMPLE_PATH}.")
-    shutil.copy2(ENV_EXAMPLE_PATH, ENV_PATH)
-    print(f"Created {ENV_PATH} from {ENV_EXAMPLE_PATH}.")
+    entries = {line.strip() for line in existing.splitlines()}
+    if entries & {".env", "/.env", ".env*", "*.env"}:
+        return
+    with GITIGNORE_PATH.open("a", encoding="utf-8") as file:
+        if existing and not existing.endswith("\n"):
+            file.write("\n")
+        file.write(".env\n")
+    print("Added .env to .gitignore.")
 
 
 def _dotenv_provides_secret() -> bool:
@@ -1272,10 +1295,12 @@ def run(dev: bool = False) -> bool:
         port = config.get("host-port", 8000)
         workers = config.get("workers", 1)
         max_request_bytes = config.get("max-request-bytes", 1_048_576)
+        session_max_age = config.get("session-max-age", 1209600)
         for name, value in (
             ("host-port", port),
             ("workers", workers),
             ("max-request-bytes", max_request_bytes),
+            ("session-max-age", session_max_age),
         ):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise BuildError(f'"{name}" must be an integer.')
@@ -1285,12 +1310,18 @@ def run(dev: bool = False) -> bool:
             raise BuildError('"host-port" must be between 1 and 65535.')
         if max_request_bytes < 1:
             raise BuildError('"max-request-bytes" must be at least 1.')
+        if session_max_age < 1:
+            raise BuildError('"session-max-age" must be at least 1.')
         host = config.get("host-ip", "127.0.0.1")
         if not isinstance(host, str) or not host.strip():
             raise BuildError('"host-ip" must be a non-empty string.')
         for name in ("cache-svelte", "session-https-only", "use-dotenv"):
             if name in config and not isinstance(config[name], bool):
                 raise BuildError(f'"{name}" must be true or false.')
+        if "content-security-policy" in config and not isinstance(
+            config["content-security-policy"], str
+        ):
+            raise BuildError('"content-security-policy" must be a string.')
         use_dotenv = bool(config.get("use-dotenv", False))
         if use_dotenv:
             _check_dotenv_installed()

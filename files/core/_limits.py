@@ -38,6 +38,7 @@ class RateLimiter:
         endpoint: str,
         limits: dict[str, dict[str, int] | None] | None,
         session: dict[str, Any],
+        client: str = "",
     ) -> None:
         if not limits or not any(limits.values()):
             return
@@ -55,6 +56,12 @@ class RateLimiter:
         site_limit = limits.get("site-wide")
         if site_limit is not None:
             shared.append(("site", "", site_limit))
+        client_limit = limits.get("per-client")
+        if client_limit is not None:
+            # The direct peer address is trustworthy because the server runs
+            # with proxy_headers=False. Behind a reverse proxy every client
+            # shares the proxy address, so this scope becomes a shared bucket.
+            shared.append(("client", client, client_limit))
 
         lock = self._endpoint_locks.setdefault(endpoint, asyncio.Lock())
         async with lock:

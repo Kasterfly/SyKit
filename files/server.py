@@ -123,7 +123,18 @@ def _api_prefix() -> str:
 
 API_PREFIX = _api_prefix()
 HIDDEN_MANIFEST_ENDPOINT = "__sykit_manifest__"
-API_CATCHALL_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"]
+API_CATCHALL_METHODS = [
+    "GET",
+    "HEAD",
+    "POST",
+    "PUT",
+    "DELETE",
+    "PATCH",
+    # OPTIONS and TRACE must reach the same 404 as unknown API paths, or
+    # their 405 "Allow" header reveals which hidden endpoints exist.
+    "OPTIONS",
+    "TRACE",
+]
 
 
 def _error(
@@ -255,10 +266,12 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
     if permission_error is not None:
         return permission_error
     try:
+        client = request.client.host if request.client else ""
         await LIMITER.check(
             f"{metadata['method']}:{metadata['endpoint']}",
             metadata.get("limits"),
             request.session,
+            client,
         )
     except RateLimitExceeded as error:
         return _error(
@@ -626,8 +639,9 @@ class RequestBodyLimitMiddleware:
 
 
 class SecurityHeadersMiddleware:
-    def __init__(self, application) -> None:
+    def __init__(self, application, csp: str | None = None) -> None:
         self.application = application
+        self.csp = csp
 
     async def __call__(self, scope, receive, send) -> None:
         async def add_headers(message) -> None:
@@ -639,6 +653,8 @@ class SecurityHeadersMiddleware:
                     "Referrer-Policy",
                     "strict-origin-when-cross-origin",
                 )
+                if self.csp:
+                    headers.setdefault("Content-Security-Policy", self.csp)
             await send(message)
 
         await self.application(scope, receive, add_headers)
@@ -745,6 +761,7 @@ def create_app():
     https_only = CONFIG.get("session-https-only", False)
     if not isinstance(https_only, bool):
         raise RuntimeError('The "session-https-only" setting must be true or false.')
+    max_age = _positive_integer_setting("session-max-age", 1_209_600)
     application = Starlette(routes=_routes())
     application = SessionMiddleware(
         application,
@@ -752,6 +769,7 @@ def create_app():
         session_cookie=SESSION_COOKIE,
         same_site="lax",
         https_only=https_only,
+        max_age=max_age,
     )
     application = RequestBodyLimitMiddleware(application, MAX_REQUEST_BYTES)
     rules, default_origins, origins = _cors_policy()
@@ -772,7 +790,10 @@ def create_app():
         CONFIG.get("allowed-hosts", ["127.0.0.1", "localhost", "::1"])
     )
     application = HostPolicyMiddleware(application, allowed_hosts)
-    application = SecurityHeadersMiddleware(application)
+    csp = CONFIG.get("content-security-policy")
+    if csp is not None and not isinstance(csp, str):
+        raise RuntimeError('The "content-security-policy" setting must be a string.')
+    application = SecurityHeadersMiddleware(application, csp)
     return application
 
 
@@ -792,6 +813,9 @@ def run() -> None:
         host=host.strip(),
         port=port,
         workers=workers,
+        # Direct clients must not spoof the scheme or their address through
+        # X-Forwarded-* headers. Re-enable only behind a trusted reverse proxy.
+        proxy_headers=False,
     )
 
 
