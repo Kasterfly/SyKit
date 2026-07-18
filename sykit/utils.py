@@ -93,6 +93,10 @@ def requires(permissions: dict[str, Any]):
     return perms(permissions)
 
 
+def hidden(function: Function) -> Function:
+    return _metadata(function, "hidden", True)
+
+
 def cors(origins: list[str] | tuple[str, ...]):
     if not isinstance(origins, (list, tuple)) or not all(
         isinstance(origin, str) for origin in origins
@@ -119,6 +123,7 @@ __all__ = [
     "cors",
     "expose",
     "get_session",
+    "hidden",
     "limits",
     "perms",
     "raw",

@@ -5,6 +5,7 @@ from .utils import (
     cors,
     expose,
     get_session,
+    hidden,
     limits,
     perms,
     raw,
@@ -13,7 +14,7 @@ from .utils import (
     web_hook,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.
@@ -24,6 +25,7 @@ __all__ = [
     "cors",
     "expose",
     "get_session",
+    "hidden",
     "limits",
     "perms",
     "raw",

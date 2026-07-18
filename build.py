@@ -126,7 +126,8 @@ JS_RESERVED_WORDS = {
     "with",
     "yield",
 }
-CLIENT_RESERVED_EXPORTS = {"SyKitError", "globalThis"}
+CLIENT_RESERVED_EXPORTS = {"SyKitError", "globalThis", "hidden_api"}
+HIDDEN_MANIFEST_ENDPOINT = "__sykit_manifest__"
 FRONTEND_PACKAGE_NAMES = {
     "@sveltejs/vite-plugin-svelte",
     "svelte",
@@ -215,6 +216,8 @@ class EndpointInfo:
     permissions: dict[str, Any] | None
     cors: tuple[str, ...] | None
     limits: dict[str, dict[str, int] | None] | None
+    hidden: bool = False
+    token: str | None = None
 
     @property
     def client_parameters(self) -> tuple[ParameterInfo, ...]:
@@ -334,6 +337,10 @@ def _normalize_endpoint(value: Any, path: Path) -> str:
     segments = endpoint.split("/")
     if any(segment in {"", ".", ".."} for segment in segments):
         raise BuildError(f"{path}: invalid endpoint path {value!r}.")
+    if endpoint == HIDDEN_MANIFEST_ENDPOINT:
+        raise BuildError(
+            f"{path}: endpoint path {HIDDEN_MANIFEST_ENDPOINT!r} is reserved by SyKit."
+        )
     return endpoint
 
 
@@ -504,6 +511,27 @@ def apply_endpoint_defaults(
     ]
 
 
+def validate_hidden_endpoints(endpoints: list[EndpointInfo]) -> None:
+    for endpoint in endpoints:
+        if not endpoint.hidden:
+            continue
+        session_permissions = (endpoint.permissions or {}).get("Session") or {}
+        if not session_permissions:
+            raise BuildError(
+                f"{endpoint.file}: @hidden endpoint {endpoint.function!r} needs "
+                'session permissions (add @perms or set "default-perms").'
+            )
+
+
+def assign_hidden_tokens(endpoints: list[EndpointInfo]) -> list[EndpointInfo]:
+    return [
+        replace(endpoint, token=secrets.token_hex(16))
+        if endpoint.hidden and endpoint.kind in CLIENT_DECORATORS
+        else endpoint
+        for endpoint in endpoints
+    ]
+
+
 def _module_name(path: Path, source_root: Path) -> str:
     relative = path.relative_to(source_root).with_suffix("")
     parts = list(relative.parts)
@@ -584,6 +612,7 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
         permissions: dict[str, Any] | None = None
         cors: tuple[str, ...] | None = None
         endpoint_limits: dict[str, dict[str, int] | None] | None = None
+        is_hidden = False
         for decorator in node.decorator_list:
             name = _get_call_name(decorator)
             if isinstance(decorator, (ast.Name, ast.Attribute)):
@@ -600,6 +629,16 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
                     raise BuildError(
                         f"{path}:{node.lineno}: @{bare_name} must be called with an argument."
                     )
+                if bare_name == "hidden":
+                    if is_hidden:
+                        raise BuildError(
+                            f"{path}:{node.lineno}: only one @hidden decorator is allowed."
+                        )
+                    is_hidden = True
+            if name == "hidden":
+                raise BuildError(
+                    f"{path}:{node.lineno}: @hidden must be used without arguments."
+                )
             if name in DECORATOR_METHODS:
                 if endpoint_kind is not None:
                     raise BuildError(
@@ -638,6 +677,11 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
 
         if endpoint_kind is None or endpoint_path is None:
             continue
+        if is_hidden and cors is not None:
+            raise BuildError(
+                f"{path}:{node.lineno}: @hidden cannot be combined with @cors; "
+                "a custom CORS rule would make the endpoint detectable."
+            )
         if endpoint_kind in CLIENT_DECORATORS:
             if node.name in JS_RESERVED_WORDS:
                 raise BuildError(
@@ -662,6 +706,7 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
                 permissions=permissions,
                 cors=cors,
                 limits=endpoint_limits,
+                hidden=is_hidden,
             )
         )
     return results
@@ -729,6 +774,8 @@ def generate_backend_manifest(endpoints: list[EndpointInfo]) -> str:
             "permissions": endpoint.permissions,
             "cors": list(endpoint.cors or ()),
             "limits": endpoint.limits,
+            "hidden": endpoint.hidden,
+            "token": endpoint.token,
         }
         python_metadata = repr(metadata)
         lines.extend(
@@ -821,11 +868,62 @@ def generate_client_module(
         "}",
         "",
     ]
+    has_hidden = any(
+        endpoint.hidden and endpoint.kind in CLIENT_DECORATORS for endpoint in endpoints
+    )
+    if has_hidden:
+        lines.extend(
+            [
+                "let $sykitHiddenPromise = null;",
+                "",
+                "function hidden_api() {",
+                '  throw new SyKitError("Endpoint not found.", 404, { error: "Endpoint not found." });',
+                "}",
+                "",
+                "async function $sykitHiddenManifest() {",
+                "  try {",
+                f"    const data = await $sykitPost({_json_dump(HIDDEN_MANIFEST_ENDPOINT)}, {{}});",
+                '    if (data && typeof data === "object" && !$sykitGlobal.Array.isArray(data)) return data;',
+                "  } catch {}",
+                "  return {};",
+                "}",
+                "",
+                "async function $sykitHiddenCall(token, values) {",
+                "  let map = $sykitHiddenPromise ? await $sykitHiddenPromise : null;",
+                "  if (!map || !map[token]) {",
+                "    $sykitHiddenPromise = $sykitHiddenManifest();",
+                "    map = await $sykitHiddenPromise;",
+                "  }",
+                "  const record = map[token];",
+                "  if (!record) return hidden_api();",
+                "  const named = {};",
+                "  (record.p || []).forEach((name, index) => { named[name] = values[index]; });",
+                "  const compact = $sykitCompact(named);",
+                '  return record.m === "GET" ? $sykitGet(record.e, compact) : $sykitPost(record.e, compact);',
+                "}",
+                "",
+            ]
+        )
     for endpoint in endpoints:
         if endpoint.kind not in CLIENT_DECORATORS:
             continue
         parameters = endpoint.client_parameters
         signature = ", ".join(parameter.name for parameter in parameters)
+        if endpoint.hidden:
+            if not endpoint.token:
+                raise BuildError(
+                    f"Hidden endpoint {endpoint.function!r} has no client token."
+                )
+            arguments = "[" + ", ".join(p.name for p in parameters) + "]"
+            lines.extend(
+                [
+                    f"export async function {endpoint.function}({signature}) {{",
+                    f"  return $sykitHiddenCall({_json_dump(endpoint.token)}, {arguments});",
+                    "}",
+                    "",
+                ]
+            )
+            continue
         values = _js_object_expression(parameters)
         helper = "$sykitPost" if endpoint.kind == "expose" else "$sykitGet"
         lines.extend(
@@ -1205,6 +1303,8 @@ def run(dev: bool = False) -> bool:
         validate_module_roots(python_files)
         endpoints = detect_endpoints(python_files)
         endpoints = apply_endpoint_defaults(config, endpoints, config_path)
+        validate_hidden_endpoints(endpoints)
+        endpoints = assign_hidden_tokens(endpoints)
         backend_manifest = generate_backend_manifest(endpoints)
         client_module = generate_client_module(config, endpoints)
 

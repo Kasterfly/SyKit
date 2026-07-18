@@ -122,6 +122,8 @@ def _api_prefix() -> str:
 
 
 API_PREFIX = _api_prefix()
+HIDDEN_MANIFEST_ENDPOINT = "__sykit_manifest__"
+API_CATCHALL_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"]
 
 
 def _error(
@@ -187,18 +189,39 @@ async def _provided_values(
     return await _json_body(request)
 
 
+def _not_found() -> JSONResponse:
+    return _error(404, "Endpoint not found.")
+
+
 def _check_permissions(request: Request, metadata: dict[str, Any]) -> Response | None:
     permissions = metadata.get("permissions") or {}
     required_session = permissions.get("Session") or {}
     if not required_session:
         return None
+    # A hidden endpoint answers exactly like a nonexistent one, so a failed
+    # permission check must not reveal that the route exists.
+    hidden = bool(metadata.get("hidden"))
     if SESSION_COOKIE not in request.cookies or not request.session:
-        return _error(401, "A valid session is required.")
+        return _not_found() if hidden else _error(401, "A valid session is required.")
     session = request.session
     for key, expected in required_session.items():
         if key not in session or session[key] != expected:
-            return _error(403, "Session permission denied.")
+            return _not_found() if hidden else _error(403, "Session permission denied.")
     return None
+
+
+def _session_permits(request: Request, metadata: dict[str, Any]) -> bool:
+    permissions = metadata.get("permissions") or {}
+    required_session = permissions.get("Session") or {}
+    if not required_session:
+        return True
+    if SESSION_COOKIE not in request.cookies or not request.session:
+        return False
+    session = request.session
+    return all(
+        key in session and session[key] == expected
+        for key, expected in required_session.items()
+    )
 
 
 def _call_values(
@@ -301,6 +324,31 @@ def _handler(record: dict[str, Any]):
     return endpoint
 
 
+async def _hidden_manifest(request: Request) -> Response:
+    visible: dict[str, Any] = {}
+    for record in ENDPOINTS:
+        metadata = record["metadata"]
+        token = metadata.get("token")
+        if not metadata.get("hidden") or not token:
+            continue
+        if not _session_permits(request, metadata):
+            continue
+        visible[token] = {
+            "e": metadata["endpoint"],
+            "m": metadata["method"],
+            "p": [
+                parameter["name"]
+                for parameter in metadata["parameters"]
+                if not parameter["injected"]
+            ],
+        }
+    return JSONResponse(visible)
+
+
+async def _api_not_found(request: Request) -> Response:
+    return _not_found()
+
+
 async def _spa(request: Request) -> Response:
     requested = request.path_params.get("path", "")
     requested_path = "/" + requested
@@ -336,8 +384,25 @@ def _routes() -> list[Route]:
         record["is_async"] = inspect.iscoroutinefunction(record["function"])
         path = f"{API_PREFIX}{metadata['endpoint']}"
         routes.append(Route(path, _handler(record), methods=[metadata["method"]]))
+    # Unknown API paths answer 404 for every method so a hidden endpoint's
+    # denial is indistinguishable from a route that does not exist.
     routes.extend(
         [
+            Route(
+                f"{API_PREFIX}{HIDDEN_MANIFEST_ENDPOINT}",
+                _hidden_manifest,
+                methods=["POST"],
+            ),
+            Route(
+                API_PREFIX.rstrip("/"),
+                _api_not_found,
+                methods=API_CATCHALL_METHODS,
+            ),
+            Route(
+                f"{API_PREFIX}{{path:path}}",
+                _api_not_found,
+                methods=API_CATCHALL_METHODS,
+            ),
             Route("/", _spa, methods=["GET", "HEAD"]),
             Route("/{path:path}", _spa, methods=["GET", "HEAD"]),
         ]

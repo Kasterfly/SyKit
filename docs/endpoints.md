@@ -9,7 +9,7 @@ them, and generates the `$python` client module for the frontend.
 | --- | --- | --- | --- |
 | `@expose(name)` | POST | JSON body | Yes |
 | `@raw(name)` | GET | Query string | Yes |
-| `@web_hook(name)` | POST | JSON body | No — for external callers |
+| `@web_hook(name)` | POST | JSON body | No - for external callers |
 
 ```python
 from sykit.utils import expose
@@ -58,6 +58,41 @@ def admin_stats(): ...
 
 The visitor's session must contain every listed key with exactly that value.
 No session (401). Wrong value (403). `@requires(...)` is an alias.
+
+### `@hidden`
+
+```python
+@expose("admin_tool")
+@perms({"Session": {"role": "admin"}})
+@hidden
+def admin_tool(): ...
+```
+
+Conceals the endpoint from anyone who fails its permission check, instead of
+answering 401/403:
+
+- The server answers with the same `404 {"error": "Endpoint not found."}` an
+  unknown endpoint returns, so probing cannot tell the two apart. (Unknown
+  API paths return that 404 for every HTTP method.)
+- The compiled `$python` client does not embed the endpoint's URL, method, or
+  parameter names. Hidden wrappers resolve their route at runtime through an
+  opaque per-build token and the reserved `__sykit_manifest__` endpoint,
+  which lists only the hidden endpoints the caller's session passes
+  permissions for. For everyone else the wrapper falls back to
+  `hidden_api()`, which throws the same "Endpoint not found." `SyKitError`
+  (status 404) a nonexistent endpoint produces, so inspecting a public
+  page's bundle reveals nothing about endpoints it may not use.
+
+Rules:
+
+- `@hidden` takes no arguments and requires session permissions (its own
+  `@perms`, or a non-empty `default-perms`).
+- It cannot be combined with `@cors`; a custom CORS rule would make the
+  endpoint detectable.
+- The endpoint path `__sykit_manifest__` and the `$python` export name
+  `hidden_api` are reserved.
+- After a login that grants access, the client re-checks the manifest on the
+  next hidden call automatically; no reload needed.
 
 ### `@cors(...)`
 
