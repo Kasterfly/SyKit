@@ -74,7 +74,7 @@ class PackageManagerTests(unittest.TestCase):
 
     def add(self, source: Path) -> None:
         with contextlib.redirect_stdout(io.StringIO()):
-            package._command_add(str(source))
+            package._command_add(str(source), assume_yes=True)
 
     def remove(self, package_id: str) -> None:
         with contextlib.redirect_stdout(io.StringIO()):
@@ -94,7 +94,7 @@ class PackageManagerTests(unittest.TestCase):
             self.add(source)
         self.assertEqual(config.read_text(encoding="utf-8"), "original")
         self.assertEqual(package._load_index(), [])
-        self.assertEqual(list(package.PACKAGES_DIR.iterdir()), [])
+        self.assertFalse(package.PACKAGES_DIR.exists())
 
     def test_ambiguous_target_components_are_rejected(self) -> None:
         for target in (

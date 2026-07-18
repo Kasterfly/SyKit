@@ -67,7 +67,7 @@ The app serves on `http://127.0.0.1:8000` by default.
 | --- | --- |
 | `python SyKit init` | Create `src/sykit` configuration and a minimal starter app |
 | `python SyKit build [--dev]` | Detect endpoints, generate the `$python` client, compile into `built/`; `--dev` also runs the app |
-| `python SyKit package <add\|remove\|list\|diff>` | Manage packages that extend SyKit |
+| `python SyKit package <add\|remove\|list\|diff>` | Manage packages that extend SyKit; install from local folders, GitHub, or the official packages repo |
 | `python SyKit version` | Show the SyKit version |
 | `python SyKit help` | Show usage |
 Commands operate on the current working directory (your project root).
@@ -79,7 +79,8 @@ Commands operate on the current working directory (your project root).
 - [Configuration](docs/configuration.md): every `config.json` key, plus
   required environment variables
 - [Packages](docs/packages.md): reversible add-ons that patch the SyKit tool
-  itself
+  itself, installable from local folders, GitHub repos, or tarball URLs,
+  with a pre-install warning report
 
 ## Development
 
@@ -93,7 +94,7 @@ python tests/smoke_quickstart.py
 
 ## Status
 
-Beta (`0.3.0`)
+Beta (`0.4.0`)
 
 - Expect breaking changes before 1.0.
 - This is a side-project helper, not a production framework. For production

@@ -55,3 +55,18 @@ python -m uvicorn server:app --proxy-headers --forwarded-allow-ips="127.0.0.1"
 
 Replace `127.0.0.1` with the actual proxy address. Do not use a wildcard when
 untrusted clients can reach the application listener.
+
+## SyKit tool settings
+
+The package commands read two optional keys from the SyKit tool's own
+`sykit/config.json` (the template that sits next to the SyKit source, not a
+project's copy):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `package-default-repo` | `"Kasterfly/SyKit-Packages"` | GitHub repo used to resolve bare package names in `package add <name>` |
+| `package-max-download-mb` | `50` | Size cap for remote package downloads and their extracted content |
+
+There is deliberately no setting that disables the pre-install analysis, the
+confirmation prompt, or the critical-finding gate described in
+[Packages](packages.md).

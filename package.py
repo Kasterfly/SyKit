@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -10,6 +11,7 @@ from datetime import datetime, timezone
 from difflib import unified_diff
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 TOOL_DIR = Path(__file__).resolve().parent
 PACKAGES_DIR = TOOL_DIR / ".packages"
@@ -52,6 +54,32 @@ EDIT_ACTIONS = {
     "replace",
 }
 ANCHOR_ACTIONS = {"insert-before", "insert-after", "replace"}
+DEFAULT_PACKAGE_REPO = "Kasterfly/SyKit-Packages"
+DEFAULT_MAX_DOWNLOAD_MB = 50
+# Codepoints that can reorder or hide attacker-authored text in a terminal:
+# bidi overrides, zero-width characters, and line/paragraph separators.
+UNSAFE_DISPLAY_CODEPOINTS = frozenset(
+    {
+        0x200B,
+        0x200C,
+        0x200D,
+        0x200E,
+        0x200F,
+        0x2028,
+        0x2029,
+        0x202A,
+        0x202B,
+        0x202C,
+        0x202D,
+        0x202E,
+        0x2060,
+        0x2066,
+        0x2067,
+        0x2068,
+        0x2069,
+        0xFEFF,
+    }
+)
 
 
 class PackageError(RuntimeError):
@@ -157,6 +185,30 @@ def _require_clean_text(value: str, origin: str) -> None:
     """Reject terminal control characters (C0, DEL, C1) in printed metadata."""
     if any(ord(character) < 32 or 127 <= ord(character) <= 159 for character in value):
         raise PackageError(f"{origin} may not contain control characters.")
+
+
+def _sanitize_text(value: str) -> str:
+    """Neutralize characters that could forge or reorder terminal output.
+
+    Analyzer output can embed attacker-authored content (URLs, file payloads),
+    so control characters, bidi overrides, and zero-width characters are
+    replaced before printing.
+    """
+    return "".join(
+        "?"
+        if (
+            ord(character) < 32
+            or 127 <= ord(character) <= 159
+            or ord(character) in UNSAFE_DISPLAY_CODEPOINTS
+        )
+        else character
+        for character in value
+    )
+
+
+def _print_lines(lines: list[str]) -> None:
+    for line in lines:
+        print(_sanitize_text(line))
 
 
 def _load_manifest(package_dir: Path) -> Manifest:
@@ -266,9 +318,28 @@ def _is_ignored(path: Path) -> bool:
 
 
 def _package_files(root: Path) -> list[Path]:
-    return sorted(
-        path for path in root.rglob("*") if path.is_file() and not _is_ignored(path)
-    )
+    files: list[Path] = []
+    for path in sorted(root.rglob("*")):
+        if _is_ignored(path):
+            continue
+        if path.is_symlink():
+            raise PackageError(
+                f"{path} is a symbolic link; packages may not contain links."
+            )
+        if path.is_file():
+            files.append(path)
+    return files
+
+
+def _hash_package_folder(package_dir: Path) -> str:
+    """Content hash of a package folder (paths and bytes, order-independent)."""
+    digest = hashlib.sha256()
+    for path in _package_files(package_dir):
+        relative = path.relative_to(package_dir).as_posix()
+        data = path.read_bytes()
+        digest.update(f"{relative}\x00{len(data)}\x00".encode("utf-8"))
+        digest.update(data)
+    return f"sha256:{digest.hexdigest()}"
 
 
 def _ensure_package_store() -> None:
@@ -284,6 +355,34 @@ def _ensure_package_store() -> None:
             f"Package state folder {PACKAGES_DIR} must be a real directory inside "
             "the SyKit folder."
         )
+
+
+def _tool_settings() -> dict[str, Any]:
+    """Optional package settings from the SyKit tool's own sykit/config.json.
+
+    There is deliberately no setting that disables the pre-install analysis,
+    the confirmation prompt, or the critical-finding gate.
+    """
+    config: dict[str, Any] = {}
+    path = TOOL_DIR / "sykit" / "config.json"
+    if path.is_file():
+        value = _load_json(path)
+        if isinstance(value, dict):
+            config = value
+    repo = config.get("package-default-repo", DEFAULT_PACKAGE_REPO)
+    if not isinstance(repo, str) or not repo.strip():
+        raise PackageError(
+            'The "package-default-repo" setting must be a string like "Owner/Repo".'
+        )
+    cap = config.get("package-max-download-mb", DEFAULT_MAX_DOWNLOAD_MB)
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+        raise PackageError(
+            'The "package-max-download-mb" setting must be a positive integer.'
+        )
+    return {
+        "default-repo": repo.strip(),
+        "max-download-bytes": cap * 1024 * 1024,
+    }
 
 
 def _decode(data: bytes, label: str) -> str:
@@ -392,10 +491,17 @@ def _check_package_layout(package_dir: Path) -> None:
 def _plan_changes(package_dir: Path) -> list[Change]:
     _check_package_layout(package_dir)
     changes: dict[str, Change] = {}
+    folded_targets: set[str] = set()
 
     def register(change: Change) -> None:
-        if change.target in changes:
-            raise PackageError(f"Package changes {change.target} more than once.")
+        folded = change.target.casefold()
+        if folded in folded_targets:
+            raise PackageError(
+                f"Package changes {change.target} more than once (paths are "
+                "compared ignoring case, because case-insensitive filesystems "
+                "would apply them ambiguously)."
+            )
+        folded_targets.add(folded)
         changes[change.target] = change
 
     add_root = package_dir / ADD_DIR
@@ -577,8 +683,9 @@ def _snapshot(entry: Path, folder: str, target: str, data: bytes) -> None:
 def _apply_package(
     manifest: Manifest,
     package_dir: Path,
-    source_label: str,
+    source: Any,
     order: list[str],
+    plan: list[Change] | None = None,
 ) -> dict[str, Any]:
     installed = {entry.casefold() for entry in order}
     missing = [
@@ -589,7 +696,8 @@ def _apply_package(
             f"Package '{manifest.id}' requires packages that are not "
             f"installed: {', '.join(missing)}."
         )
-    plan = _plan_changes(package_dir)
+    if plan is None:
+        plan = _plan_changes(package_dir)
 
     created_dirs: list[str] = []
     seen_dirs: set[str] = set()
@@ -613,7 +721,7 @@ def _apply_package(
         "desc": manifest.desc,
         "package-req": list(manifest.requires),
         "credit": list(manifest.credit),
-        "source": source_label,
+        "source": source,
         "installed": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "changes": [
             {"path": change.target, "action": change.action} for change in plan
@@ -722,7 +830,7 @@ def _write_authors_file(order: list[str]) -> None:
     ]
     for package_id, name, names in credited:
         label = name or package_id
-        lines.append(f"- **{label}** (`{package_id}`) — {', '.join(names)}")
+        lines.append(f"- **{label}** (`{package_id}`) - {', '.join(names)}")
     _write_bytes_atomic(
         AUTHORS_PATH,
         ("\n".join(lines) + "\n").encode("utf-8"),
@@ -741,44 +849,215 @@ def _change_summary(record: dict[str, Any]) -> str:
     return ", ".join(part for part in parts if part)
 
 
-def _command_add(argument: str) -> None:
-    package_dir = Path(argument)
-    if not package_dir.is_dir():
-        raise PackageError(f"{package_dir} is not a package folder.")
-    manifest = _load_manifest(package_dir)
-    order = _load_index()
-    installed = _installed_id(manifest.id, order)
-    if installed is not None:
-        if installed == manifest.id:
-            raise PackageError(f"Package '{manifest.id}' is already installed.")
-        raise PackageError(
-            f"Package id '{manifest.id}' conflicts with installed id '{installed}' "
-            "on case-insensitive filesystems."
+def _source_label(record: dict[str, Any]) -> str:
+    source = record.get("source")
+    if isinstance(source, dict):
+        kind = source.get("kind")
+        spec = source.get("spec")
+        if kind == "github" and isinstance(spec, str):
+            return spec
+        if kind == "url":
+            final = source.get("final_url", spec)
+            host = ""
+            if isinstance(final, str):
+                try:
+                    host = urlsplit(final).hostname or ""
+                except ValueError:
+                    host = ""
+            return f"url:{host}" if host else "url"
+    return "local"
+
+
+def _format_size(size: int) -> str:
+    if size < 1024:
+        return f"{size} bytes"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _report_lines(
+    manifest: Manifest,
+    source: dict[str, Any],
+    notes: list[str],
+    operations: list[Any],
+    findings: list[Any],
+) -> list[str]:
+    lines = [f"Package: {manifest.name} ({manifest.id})"]
+    if manifest.desc:
+        lines.append(f"  {manifest.desc}")
+    source_line = f"Source: {source.get('spec', '')}"
+    extras = []
+    if source.get("ref_type"):
+        extras.append(str(source["ref_type"]))
+    sha = source.get("resolved_sha")
+    if isinstance(sha, str) and sha:
+        extras.append(f"commit {sha[:12]}")
+    if extras:
+        source_line += f" ({', '.join(extras)})"
+    lines.append(source_line)
+    lines.extend(notes)
+
+    adds = sum(1 for operation in operations if operation.action == "add")
+    edits = [operation for operation in operations if operation.action == "edit"]
+    removes = sum(1 for operation in operations if operation.action == "remove")
+    critical_targets = {
+        finding.path for finding in findings if finding.severity == "critical"
+    }
+    core_edits = sum(1 for operation in edits if operation.target in critical_targets)
+    size = sum(operation.size for operation in operations)
+    lines.append(
+        f"Adds {adds} files, edits {len(edits)} ({core_edits} core), removes "
+        f"{removes}. New content: {_format_size(size)}."
+    )
+    lines.append("")
+    if findings:
+        for finding in findings:
+            lines.append(
+                f"  {finding.severity.upper():<9} {finding.code:<18} "
+                f"{finding.action} {finding.path} - {finding.detail}"
+            )
+    else:
+        lines.append("  No findings.")
+    lines.append("")
+    counts = {"critical": 0, "warning": 0, "info": 0}
+    for finding in findings:
+        counts[finding.severity] += 1
+    lines.append(
+        f"{counts['critical']} critical, {counts['warning']} warning(s), "
+        f"{counts['info']} info."
+    )
+    lines.append(
+        "Installing a package grants it the same trust as running SyKit's own code."
+    )
+    return lines
+
+
+def _confirm_install(
+    findings: list[Any],
+    operations: list[Any],
+    assume_yes: bool,
+    allow_core: bool,
+) -> bool:
+    criticals = sum(1 for finding in findings if finding.severity == "critical")
+    if criticals and not allow_core:
+        print(
+            f"Refusing to install: {criticals} critical finding(s). Review the "
+            "package, then re-run with --allow-core to accept changes to "
+            "SyKit core files."
         )
-    try:
-        PACKAGES_DIR.mkdir(exist_ok=True)
-    except OSError as error:
-        raise PackageError(f"Could not create package state folder: {error}") from error
-    authors_before = _optional_file_state(AUTHORS_PATH)
-    record = _apply_package(manifest, package_dir, argument, order)
-    try:
-        _write_authors_file(order)
-    except (PackageError, OSError) as error:
+        return False
+    if assume_yes:
+        return True
+    while True:
         try:
-            _reverse_package(record)
-            shutil.rmtree(_entry_dir(manifest.id))
-            order.remove(manifest.id)
-            _save_index(order)
-            _restore_file_state(AUTHORS_PATH, authors_before)
-        except (PackageError, OSError) as restore_error:
+            answer = input("Install? [y/N, d shows package content] ")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        answer = answer.strip().lower()
+        if answer == "d":
+            import package_analysis
+
+            _print_lines(package_analysis.render_details(operations))
+            continue
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"", "n", "no"}:
+            return False
+        print('Please answer "y", "n", or "d".')
+
+
+def _command_add(
+    argument: str,
+    *,
+    assume_yes: bool = False,
+    allow_core: bool = False,
+) -> bool:
+    remote = None
+    notes: list[str] = []
+    package_dir = Path(argument)
+    if package_dir.is_dir():
+        source_info: dict[str, Any] = {
+            "spec": argument,
+            "kind": "local",
+            "resolved_sha": None,
+            "ref_type": None,
+        }
+        notes.append(f"Origin: local folder {argument}")
+        if ID_PATTERN.fullmatch(argument):
+            notes.append(
+                f"Note: the local folder {argument!r} takes priority over the "
+                f"package name {argument!r}; use github:Owner/Repo/... to "
+                "force a remote fetch."
+            )
+    else:
+        import package_remote
+
+        resolved = package_remote.resolve(argument, _tool_settings())
+        if isinstance(resolved, package_remote.RepoListing):
+            _print_lines(resolved.lines)
+            return True
+        remote = resolved
+        package_dir = remote.directory
+        source_info = dict(remote.source)
+        notes.extend(remote.notes)
+    try:
+        manifest = _load_manifest(package_dir)
+        order = _load_index()
+        installed = _installed_id(manifest.id, order)
+        if installed is not None:
+            if installed == manifest.id:
+                raise PackageError(f"Package '{manifest.id}' is already installed.")
             raise PackageError(
-                f"Adding '{manifest.id}' failed ({error}) and rolling back also "
-                f"failed ({restore_error})."
-            ) from restore_error
-        raise PackageError(
-            f"Adding '{manifest.id}' failed; everything was rolled back. ({error})"
-        ) from error
-    print(f"Added package '{manifest.id}' ({_change_summary(record)}).")
+                f"Package id '{manifest.id}' conflicts with installed id "
+                f"'{installed}' on case-insensitive filesystems."
+            )
+        plan = _plan_changes(package_dir)
+        source_info["content_hash"] = _hash_package_folder(package_dir)
+
+        import package_analysis
+
+        operations = package_analysis.collect_operations(package_dir)
+        findings = package_analysis.analyze_operations(operations)
+        _print_lines(_report_lines(manifest, source_info, notes, operations, findings))
+        if not _confirm_install(findings, operations, assume_yes, allow_core):
+            print("Aborted; no changes were made.")
+            return False
+        if _hash_package_folder(package_dir) != source_info["content_hash"]:
+            raise PackageError(
+                "Package contents changed between analysis and installation; aborting."
+            )
+        try:
+            PACKAGES_DIR.mkdir(exist_ok=True)
+        except OSError as error:
+            raise PackageError(
+                f"Could not create package state folder: {error}"
+            ) from error
+        authors_before = _optional_file_state(AUTHORS_PATH)
+        record = _apply_package(manifest, package_dir, source_info, order, plan)
+        try:
+            _write_authors_file(order)
+        except (PackageError, OSError) as error:
+            try:
+                _reverse_package(record)
+                shutil.rmtree(_entry_dir(manifest.id))
+                order.remove(manifest.id)
+                _save_index(order)
+                _restore_file_state(AUTHORS_PATH, authors_before)
+            except (PackageError, OSError) as restore_error:
+                raise PackageError(
+                    f"Adding '{manifest.id}' failed ({error}) and rolling back "
+                    f"also failed ({restore_error})."
+                ) from restore_error
+            raise PackageError(
+                f"Adding '{manifest.id}' failed; everything was rolled back. ({error})"
+            ) from error
+        print(f"Added package '{manifest.id}' ({_change_summary(record)}).")
+        return True
+    finally:
+        if remote is not None:
+            remote.cleanup()
 
 
 def _command_remove(package_id: str) -> None:
@@ -843,6 +1122,9 @@ def _command_remove(package_id: str) -> None:
         for entry in tail:
             source_copy = stash / entry / SOURCE_COPY_NAME
             manifest = _load_manifest(source_copy)
+            # Re-applying the stored copy of an already-trusted package: no
+            # analysis prompt here, on purpose. The bytes were reviewed and
+            # accepted at install time and cannot have changed since.
             _apply_package(
                 manifest, source_copy, records[entry].get("source", ""), order
             )
@@ -903,6 +1185,7 @@ def _command_list() -> None:
         print(line)
         if record.get("desc"):
             print(f"       {record['desc']}")
+        print(f"       source: {_sanitize_text(_source_label(record))}")
         if record["package-req"]:
             print(f"       requires: {', '.join(record['package-req'])}")
         credit = record.get("credit")
@@ -955,7 +1238,8 @@ def _command_diff(argument: str) -> None:
             emitted = False
             for line in lines:
                 emitted = True
-                sys.stdout.write(line if line.endswith("\n") else line + "\n")
+                text = line if line.endswith("\n") else line + "\n"
+                sys.stdout.write(_sanitize_text(text.rstrip("\n")) + "\n")
             if not emitted:
                 print(f"{target}: no content changes ({action})")
         print()
@@ -964,9 +1248,16 @@ def _command_diff(argument: str) -> None:
 def print_package_help() -> None:
     print("Usage: python SyKit package <command>")
     print("Commands:")
-    print("  add <path>   Install the package folder at <path> into SyKit")
+    print("  add <source> [--yes] [--allow-core]")
+    print("      Install a package. <source> is a local folder, a package name")
+    print("      (name[@ref], fetched from the official packages repo), a")
+    print("      github:Owner/Repo[/subdir][@ref] spec, or an https tarball URL.")
+    print("      Every install prints a static analysis and asks to confirm.")
+    print("      --yes skips the prompt when there are no critical findings;")
+    print("      --allow-core is additionally required when the package touches")
+    print("      SyKit core files.")
     print("  remove <id>  Uninstall a package as if it was never added")
-    print("  list         Show installed packages in install order")
+    print("  list         Show installed packages and where they came from")
     print("  diff <id|*>  Show what a package (or every package) changed")
 
 
@@ -976,9 +1267,27 @@ def run(arguments: list[str]) -> bool:
         return True
     command, extra = arguments[0].lower(), arguments[1:]
     try:
-        if command == "add" and len(extra) == 1:
-            _command_add(extra[0])
-            return True
+        if command == "add" and extra:
+            assume_yes = False
+            allow_core = False
+            positional: list[str] = []
+            for argument in extra:
+                lowered = argument.lower()
+                if lowered == "--yes":
+                    assume_yes = True
+                elif lowered == "--allow-core":
+                    allow_core = True
+                elif lowered.startswith("--"):
+                    print(f"Unknown package add option: {argument}")
+                    return False
+                else:
+                    positional.append(argument)
+            if len(positional) != 1:
+                print_package_help()
+                return False
+            return _command_add(
+                positional[0], assume_yes=assume_yes, allow_core=allow_core
+            )
         if command == "remove" and len(extra) == 1:
             _command_remove(extra[0])
             return True
