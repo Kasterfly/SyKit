@@ -13,6 +13,10 @@ def main(arguments: list[str] | None = None) -> int:
         import package
 
         return 0 if package.run(arguments[1:]) else 1
+    if arguments and arguments[0].lower() == "update":
+        import update
+
+        return 0 if update.run(arguments[1:]) else 1
     if arguments and arguments[0].lower() == "build":
         flags = [argument.lower() for argument in arguments[1:]]
         if any(flag != "--dev" for flag in flags):

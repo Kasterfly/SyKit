@@ -124,13 +124,36 @@ overrides, and zero-width characters in package content are replaced.
 
 SyKit is a cloned tool folder and packages patch it in place, so updating
 the folder with `git pull` while packages are installed will conflict or
-silently mismatch. Until a dedicated update command exists, update in
-three steps: `package remove` every installed package (removal restores
-the original files exactly), update the SyKit folder, then `package add`
-the packages again. A package whose edits no longer anchor against the
-new version fails cleanly at re-add; look for a newer release of that
-package. The `sykit-req` manifest key turns version mismatches into a
-clear message up front.
+silently mismatch. Use the update command instead:
+
+```
+python SyKit update [source] [--yes]
+```
+
+It removes every installed package (removal restores the original files
+exactly), replaces the core files with the fetched release, then
+reapplies the stored copies of the packages in their original order and
+reports exactly which ones no longer fit: a package whose `sykit-req`
+exceeds the new version is refused with a message naming both versions,
+and a package whose edits no longer anchor fails cleanly and stays
+uninstalled; look for a newer release of that package and
+`package add` it again.
+
+Details:
+
+- Without a source, the latest release of the `update-repo` tool setting
+  (default `Kasterfly/SyKit`) is fetched, falling back to the default
+  branch; refs are pinned to exact commits like package installs. The
+  source can also be a tag, branch, or commit of that repo, or a local
+  folder holding a SyKit tree (useful offline).
+- The prompt defaults to No and a closed stdin aborts; pass `--yes` for
+  scripts. Same-version updates stop early; downgrades warn.
+- `.git/` and `.packages/` are preserved; everything else in the tool
+  folder is made equal to the release, and `sykit/config.json` is reset
+  to the release template (a note lists tool settings that differed).
+- Reapplied packages keep their recorded bytes and provenance; nothing
+  is re-downloaded and there is no second review prompt, mirroring how
+  removal reapplies later packages.
 
 ## Provenance
 

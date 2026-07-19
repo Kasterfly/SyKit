@@ -480,22 +480,15 @@ def _locate_package(
     )
 
 
-def _resolve_github(
-    spec: SourceSpec,
-    settings: dict[str, Any],
+def _resolve_commit(
+    owner: str,
+    repo: str,
+    ref: str,
     *,
-    bare_name: str = "",
-    prefer_release: bool = False,
-) -> RemotePackage | RepoListing:
-    owner, repo = spec.owner, spec.repo
+    prefer_release: bool,
+) -> tuple[str, str | None, str | None, list[str]]:
+    """Pick and pin a ref: returns (ref, ref_type, sha, notes)."""
     notes: list[str] = []
-    official = f"{owner}/{repo}".casefold() == settings["default-repo"].casefold()
-    if official:
-        notes.append(f"Origin: official packages repo {owner}/{repo}")
-    else:
-        notes.append(f"Origin: third-party GitHub repository {owner}/{repo}")
-
-    ref = spec.ref
     ref_type: str | None = None
     sha: str | None = None
     api_down = False
@@ -556,8 +549,16 @@ def _resolve_github(
             f"Warning: installed from branch {ref!r}; the branch moves and "
             "future installs may differ."
         )
+    return ref, ref_type, sha, notes
 
-    download_ref = sha if sha else ref
+
+def _fetch_tree(
+    owner: str,
+    repo: str,
+    download_ref: str,
+    settings: dict[str, Any],
+) -> tuple[tempfile.TemporaryDirectory, Path]:
+    """Download and extract a repository archive; returns (temporary, root)."""
     temporary = tempfile.TemporaryDirectory(
         prefix="sykit-remote-", ignore_cleanup_errors=True
     )
@@ -578,7 +579,61 @@ def _resolve_github(
         tree.mkdir()
         _extract_archive(tar_path, tree, settings["max-download-bytes"])
         tar_path.unlink(missing_ok=True)
-        root = _archive_root(tree)
+        return temporary, _archive_root(tree)
+    except BaseException:
+        temporary.cleanup()
+        raise
+
+
+def fetch_repo(
+    repo_spec: str,
+    ref: str,
+    settings: dict[str, Any],
+) -> RemotePackage:
+    """Fetch a whole GitHub repository tree (for the SyKit update command).
+
+    An empty ref means the latest release, falling back to the default
+    branch. Returns a RemotePackage whose directory is the repository
+    root; call cleanup() when done.
+    """
+    owner, repo = _split_repo(repo_spec)
+    if ref:
+        _validate_ref(ref, "update ref")
+    resolved_ref, ref_type, sha, notes = _resolve_commit(
+        owner, repo, ref, prefer_release=True
+    )
+    temporary, root = _fetch_tree(owner, repo, sha if sha else resolved_ref, settings)
+    source = {
+        "spec": f"github:{owner}/{repo}@{resolved_ref}",
+        "kind": "github",
+        "resolved_sha": sha,
+        "ref_type": ref_type,
+    }
+    return RemotePackage(root, source, notes, temporary)
+
+
+def _resolve_github(
+    spec: SourceSpec,
+    settings: dict[str, Any],
+    *,
+    bare_name: str = "",
+    prefer_release: bool = False,
+) -> RemotePackage | RepoListing:
+    owner, repo = spec.owner, spec.repo
+    notes: list[str] = []
+    official = f"{owner}/{repo}".casefold() == settings["default-repo"].casefold()
+    if official:
+        notes.append(f"Origin: official packages repo {owner}/{repo}")
+    else:
+        notes.append(f"Origin: third-party GitHub repository {owner}/{repo}")
+
+    ref, ref_type, sha, resolve_notes = _resolve_commit(
+        owner, repo, spec.ref, prefer_release=prefer_release
+    )
+    notes.extend(resolve_notes)
+    temporary = None
+    try:
+        temporary, root = _fetch_tree(owner, repo, sha if sha else ref, settings)
         located = _locate_package(root, spec, bare_name, ref)
         if isinstance(located, RepoListing):
             temporary.cleanup()
@@ -596,7 +651,8 @@ def _resolve_github(
         }
         return RemotePackage(directory, source, notes, temporary)
     except BaseException:
-        temporary.cleanup()
+        if temporary is not None:
+            temporary.cleanup()
         raise
 
 

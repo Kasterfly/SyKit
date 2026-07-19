@@ -68,6 +68,7 @@ project's copy):
 | --- | --- | --- |
 | `package-default-repo` | `"Kasterfly/SyKit-Packages"` | GitHub repo used to resolve bare package names in `package add <name>` |
 | `package-max-download-mb` | `50` | Size cap for remote package downloads and their extracted content |
+| `update-repo` | `"Kasterfly/SyKit"` | GitHub repo `python SyKit update` fetches SyKit releases from |
 
 There is deliberately no setting that disables the pre-install analysis, the
 confirmation prompt, or the critical-finding gate described in

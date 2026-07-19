@@ -6,5 +6,7 @@ def print_help():
     print("  build [--dev]  Generate endpoints and compile the production")
     print("                 application; --dev also runs the built app")
     print("  package <add|remove|list|diff>  Manage packages that extend SyKit")
+    print("  update [source] [--yes]  Update the SyKit folder to the latest")
+    print("                 release, removing and reapplying installed packages")
     print("  version  Show the SyKit source version")
     print("  help   Show this help")
