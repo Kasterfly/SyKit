@@ -90,6 +90,7 @@ Finding codes:
 | `config-edit` | critical | `sykit/config.json` changes; settings such as `package-default-repo` quietly persist into later installs |
 | `ci-edit` | critical | anything under `.github/` changes; CI executes code on push |
 | `deps-edit` | critical | `requirements.txt`, `requirements-dev.txt`, or `pyproject.toml` change |
+| `dependency` | warning | the manifest declares runtime dependencies via `deps`; SyKit does not install them |
 | `replace-file` | warning | an edit replaces a whole file instead of using an anchored edit |
 | `remove` | warning | a file is removed |
 | `url` | warning or info | URLs in introduced content; info for https URLs on a small allowlist (github.com, raw.githubusercontent.com, pypi.org, npmjs.com) and in documentation files; raw IP addresses always warn |
@@ -118,6 +119,18 @@ Flags:
 
 Report output is sanitized before printing: control characters, bidi
 overrides, and zero-width characters in package content are replaced.
+
+## Updating SyKit with packages installed
+
+SyKit is a cloned tool folder and packages patch it in place, so updating
+the folder with `git pull` while packages are installed will conflict or
+silently mismatch. Until a dedicated update command exists, update in
+three steps: `package remove` every installed package (removal restores
+the original files exactly), update the SyKit folder, then `package add`
+the packages again. A package whose edits no longer anchor against the
+new version fails cleanly at re-add; look for a newer release of that
+package. The `sykit-req` manifest key turns version mismatches into a
+clear message up front.
 
 ## Provenance
 
@@ -177,6 +190,8 @@ internal repo with the `package-default-repo` setting.
     "id": "my-package",
     "name": "My Package",
     "desc": "What it does.",
+    "sykit-req": "0.4.1",
+    "deps": ["some-dependency>=1.0,<2"],
     "package-req": ["some-other-id"],
     "credit": ["John Doe (https://example.com)"]
 }
@@ -190,6 +205,15 @@ internal repo with the `package-default-repo` setting.
      contain terminal control characters.
    - `package-req` **optional**, package ids that must already be installed
      before this one can be added.
+   - `sykit-req` **optional**, the minimum SyKit version the package
+     needs, as `"X.Y.Z"`. Installing on an older SyKit fails up front
+     with a clear message. Handlers before 0.4.1 reject manifests that
+     use this key.
+   - `deps` **optional**, a string or list of pip requirement strings the
+     package's code needs at runtime (for example `"boto3>=1.34,<2"`).
+     SyKit never installs dependencies: they are flagged in the
+     pre-install report, recorded, shown by `list`, and printed after
+     install so you can install them yourself.
    - `credit` **optional**, a string or list of strings naming the package's
      authors. Values may not contain terminal control characters. While the
      package is installed, they are listed in `.packages/authors.md` (removed

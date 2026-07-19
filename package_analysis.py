@@ -430,11 +430,25 @@ def _content_findings(operation: Operation) -> list[Finding]:
     return findings
 
 
-def analyze_operations(operations: list[Operation]) -> list[Finding]:
+def analyze_operations(
+    operations: list[Operation],
+    deps: tuple[str, ...] | list[str] = (),
+) -> list[Finding]:
     findings: list[Finding] = []
     for operation in operations:
         findings.extend(_path_findings(operation))
         findings.extend(_content_findings(operation))
+    for entry in deps:
+        findings.append(
+            Finding(
+                "warning",
+                "dependency",
+                "manifest",
+                package.MANIFEST_NAME,
+                f"declares runtime dependency {entry!r}; SyKit does not "
+                "install dependencies",
+            )
+        )
     findings.sort(
         key=lambda finding: (
             SEVERITY_ORDER[finding.severity],
@@ -447,7 +461,8 @@ def analyze_operations(operations: list[Operation]) -> list[Finding]:
 
 def analyze_package(package_dir: Path) -> tuple[list[Operation], list[Finding]]:
     operations = collect_operations(package_dir)
-    return operations, analyze_operations(operations)
+    manifest = package._load_manifest(package_dir)
+    return operations, analyze_operations(operations, manifest.deps)
 
 
 def render_details(operations: list[Operation]) -> list[str]:

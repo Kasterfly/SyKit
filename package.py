@@ -43,7 +43,9 @@ WINDOWS_DEVICE_NAMES = frozenset(
         *(f"lpt{number}" for number in range(1, 10)),
     }
 )
-MANIFEST_KEYS = {"id", "name", "desc", "package-req", "credit"}
+MANIFEST_KEYS = {"id", "name", "desc", "package-req", "credit", "sykit-req", "deps"}
+VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+")
+DEP_MAX_LENGTH = 200
 CHANGE_ACTIONS = {"add", "edit", "remove"}
 EDIT_ACTIONS = {
     "replace-file",
@@ -171,6 +173,8 @@ class Manifest:
     desc: str
     requires: tuple[str, ...]
     credit: tuple[str, ...]
+    sykit_req: str
+    deps: tuple[str, ...]
 
 
 @dataclass
@@ -259,13 +263,77 @@ def _load_manifest(package_dir: Path) -> Manifest:
         )
     for entry in credit:
         _require_clean_text(entry, f'{manifest_path}: "credit"')
+    sykit_req = value.get("sykit-req", "")
+    if not isinstance(sykit_req, str):
+        raise PackageError(
+            f'{manifest_path}: "sykit-req" must be a version string like "0.4.1".'
+        )
+    if sykit_req:
+        _parse_version(sykit_req, f'{manifest_path}: "sykit-req"')
+    deps = value.get("deps", [])
+    if isinstance(deps, str):
+        deps = [deps]
+    if not isinstance(deps, list) or not all(
+        isinstance(entry, str) and entry.strip() for entry in deps
+    ):
+        raise PackageError(
+            f'{manifest_path}: "deps" must be a string or a list of non-empty '
+            "dependency strings."
+        )
+    deps = [entry.strip() for entry in deps]
+    for entry in deps:
+        if (
+            len(entry) > DEP_MAX_LENGTH
+            or not entry[0].isalnum()
+            or not all(32 <= ord(character) <= 126 for character in entry)
+        ):
+            raise PackageError(
+                f'{manifest_path}: "deps" entry {entry!r} must be a printable '
+                f"ASCII requirement of at most {DEP_MAX_LENGTH} characters that "
+                "starts with a letter or digit."
+            )
+    folded_deps = [entry.casefold() for entry in deps]
+    if len(set(folded_deps)) != len(folded_deps):
+        raise PackageError(f'{manifest_path}: "deps" may not contain duplicates.')
     return Manifest(
         package_id,
         name,
         desc,
         tuple(requires),
         tuple(entry.strip() for entry in credit),
+        sykit_req,
+        tuple(deps),
     )
+
+
+def _parse_version(value: Any, origin: str) -> tuple[int, ...]:
+    if not isinstance(value, str) or VERSION_PATTERN.fullmatch(value) is None:
+        raise PackageError(f'{origin}: expected a version like "0.4.1", not {value!r}.')
+    return tuple(int(part) for part in value.split("."))
+
+
+def _current_sykit_version() -> str:
+    try:
+        from sykit import __version__
+    except ImportError as error:
+        raise PackageError(
+            "Could not determine the SyKit version (sykit/__init__.py is "
+            f"missing or broken): {error}"
+        ) from error
+    return __version__
+
+
+def _check_sykit_requirement(manifest: Manifest) -> None:
+    if not manifest.sykit_req:
+        return
+    current = _current_sykit_version()
+    required = _parse_version(manifest.sykit_req, f"package '{manifest.id}'")
+    installed = _parse_version(current, "sykit/__init__.py")
+    if installed < required:
+        raise PackageError(
+            f"Package '{manifest.id}' requires SyKit {manifest.sykit_req} or "
+            f"newer; this SyKit is {current}. Update SyKit first."
+        )
 
 
 def _normalize_target(raw: Any, origin: str) -> str:
@@ -721,6 +789,8 @@ def _apply_package(
         "desc": manifest.desc,
         "package-req": list(manifest.requires),
         "credit": list(manifest.credit),
+        "sykit-req": manifest.sykit_req,
+        "deps": list(manifest.deps),
         "source": source,
         "installed": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "changes": [
@@ -886,6 +956,8 @@ def _report_lines(
     lines = [f"Package: {manifest.name} ({manifest.id})"]
     if manifest.desc:
         lines.append(f"  {manifest.desc}")
+    if manifest.sykit_req:
+        lines.append(f"Requires SyKit {manifest.sykit_req} or newer.")
     source_line = f"Source: {source.get('spec', '')}"
     extras = []
     if source.get("ref_type"):
@@ -1004,6 +1076,7 @@ def _command_add(
         notes.extend(remote.notes)
     try:
         manifest = _load_manifest(package_dir)
+        _check_sykit_requirement(manifest)
         order = _load_index()
         installed = _installed_id(manifest.id, order)
         if installed is not None:
@@ -1019,7 +1092,7 @@ def _command_add(
         import package_analysis
 
         operations = package_analysis.collect_operations(package_dir)
-        findings = package_analysis.analyze_operations(operations)
+        findings = package_analysis.analyze_operations(operations, manifest.deps)
         _print_lines(_report_lines(manifest, source_info, notes, operations, findings))
         if not _confirm_install(findings, operations, assume_yes, allow_core):
             print("Aborted; no changes were made.")
@@ -1054,6 +1127,13 @@ def _command_add(
                 f"Adding '{manifest.id}' failed; everything was rolled back. ({error})"
             ) from error
         print(f"Added package '{manifest.id}' ({_change_summary(record)}).")
+        if manifest.deps:
+            quoted = " ".join(f'"{entry}"' for entry in manifest.deps)
+            print(
+                "This package declares dependencies that SyKit does not "
+                "install automatically:"
+            )
+            print(f"  python -m pip install {quoted}")
         return True
     finally:
         if remote is not None:
@@ -1188,6 +1268,10 @@ def _command_list() -> None:
         print(f"       source: {_sanitize_text(_source_label(record))}")
         if record["package-req"]:
             print(f"       requires: {', '.join(record['package-req'])}")
+        deps = record.get("deps")
+        if isinstance(deps, list) and deps:
+            joined = ", ".join(str(entry) for entry in deps)
+            print(f"       deps: {_sanitize_text(joined)}")
         credit = record.get("credit")
         if isinstance(credit, list) and credit:
             print(f"       credit: {', '.join(credit)}")
