@@ -33,6 +33,10 @@ class CORSPolicyTests(unittest.TestCase):
                 ROOT / "files" / "core" / "_sessions.py",
                 runtime / "core" / "_sessions.py",
             )
+            shutil.copy2(
+                ROOT / "files" / "core" / "_apikeys.py",
+                runtime / "core" / "_apikeys.py",
+            )
             shutil.copytree(ROOT / "sykit", runtime / "app" / "sykit")
             (runtime / "config.json").write_text(
                 json.dumps(

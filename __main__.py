@@ -13,6 +13,10 @@ def main(arguments: list[str] | None = None) -> int:
         import package
 
         return 0 if package.run(arguments[1:]) else 1
+    if arguments and arguments[0].lower() == "keys":
+        import keys
+
+        return 0 if keys.run(arguments[1:]) else 1
     if arguments and arguments[0].lower() == "update":
         import update
 

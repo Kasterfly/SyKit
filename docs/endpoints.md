@@ -98,6 +98,19 @@ Rules:
 - After a login that grants access, the client re-checks the manifest on the
   next hidden call automatically; no reload needed.
 
+### `@api_key(...)`
+
+```python
+@web_hook("report")
+@api_key(["reports:read"])
+def report(): ...
+```
+
+Requires an API key (the `X-API-Key` header) on a `@web_hook` endpoint;
+bare `@api_key` accepts any active key, a list requires those scopes.
+Only for `@web_hook`, and not combinable with `@hidden`. Keys are
+managed with `python SyKit keys`; see [API Keys](apikeys.md).
+
 ### `@cors(...)`
 
 ```python
@@ -120,6 +133,8 @@ Request-rate caps support four scopes:
   launched with proxy headers enabled for that trusted proxy.
 - `per-session`: one count per signed session cookie. A client can reset this
   scope by clearing cookies.
+- `per-key`: one count per API key, so one caller cannot exhaust
+  another's budget. Requires `@api_key` on the endpoint.
 - `site-wide`: one count shared by all workers and clients.
 - `per-worker`: one in-memory count in each server worker.
 

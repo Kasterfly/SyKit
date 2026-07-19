@@ -205,6 +205,10 @@ class SecurityRuntimeTests(unittest.TestCase):
                 ROOT / "files" / "core" / "_sessions.py",
                 runtime / "core" / "_sessions.py",
             )
+            shutil.copy2(
+                ROOT / "files" / "core" / "_apikeys.py",
+                runtime / "core" / "_apikeys.py",
+            )
             shutil.copytree(ROOT / "sykit", runtime / "app" / "sykit")
             (runtime / "config.json").write_text(
                 json.dumps(
@@ -299,8 +303,8 @@ class BuildSecurityTests(unittest.TestCase):
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_version_is_0_6_0(self) -> None:
-        self.assertEqual(__version__, "0.6.0")
+    def test_version_is_0_7_0(self) -> None:
+        self.assertEqual(__version__, "0.7.0")
 
 
 if __name__ == "__main__":

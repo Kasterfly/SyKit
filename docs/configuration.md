@@ -15,6 +15,7 @@ defaults below apply when a key is missing.
 | `session-https-only` | `false` | Send the session cookie only over HTTPS; turn on in production behind TLS |
 | `session-max-age` | `1209600` (14 days) | Session lifetime in seconds |
 | `session-store` | `""` (signed cookies) | Where session data lives: `""`, `sqlite[:path]`, or a `scheme:target` store added by a package ([details](auth.md#session-storage)) |
+| `apikey-store` | `""` (project-root sqlite) | Where API keys live: `""`, `sqlite:path`, or a `scheme:target` store added by a package ([details](apikeys.md#storage)) |
 | `content-security-policy` | none | Content-Security-Policy header sent with every response; an empty string disables it |
 | `use-dotenv` | `false` | Load `.env` from the project root at startup (needs `python-dotenv`); build creates the file if missing, protects it on POSIX, and adds it to `.gitignore` |
 | `sykit-folder-path` | `""` | Where the `sykit/` folder lives inside `src/` (relative path; `""` means `src/sykit`, and path "example/" means `src/example/sykit`) |

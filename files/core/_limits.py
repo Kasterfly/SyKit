@@ -39,6 +39,7 @@ class RateLimiter:
         limits: dict[str, dict[str, int] | None] | None,
         session: dict[str, Any],
         client: str = "",
+        key_id: str = "",
     ) -> None:
         if not limits or not any(limits.values()):
             return
@@ -62,6 +63,11 @@ class RateLimiter:
             # with proxy_headers=False. Behind a reverse proxy every client
             # shares the proxy address, so this scope becomes a shared bucket.
             shared.append(("client", client, client_limit))
+        key_limit = limits.get("per-key")
+        if key_limit is not None and key_id:
+            # Build guarantees per-key limits only appear on @api_key
+            # endpoints, so a validated key id is always present here.
+            shared.append(("key", key_id, key_limit))
 
         lock = self._endpoint_locks.setdefault(endpoint, asyncio.Lock())
         async with lock:

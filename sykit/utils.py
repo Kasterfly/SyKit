@@ -97,6 +97,27 @@ def hidden(function: Function) -> Function:
     return _metadata(function, "hidden", True)
 
 
+def api_key(scopes: list[str] | Callable[..., Any] | None = None):
+    """Require an API key on a @web_hook endpoint.
+
+    Use bare (@api_key) to accept any active key, or pass a list of
+    scope names the key must have (@api_key(["orders:write"])).
+    """
+    if callable(scopes):
+        return _metadata(scopes, "api_key", {"scopes": []})
+    if scopes is None:
+        scopes = []
+    if not isinstance(scopes, (list, tuple)) or not all(
+        isinstance(scope, str) and scope for scope in scopes
+    ):
+        raise TypeError("SyKit API key scopes must be a list of strings.")
+
+    def decorator(function: Function) -> Function:
+        return _metadata(function, "api_key", {"scopes": list(scopes)})
+
+    return decorator
+
+
 def cors(origins: list[str] | tuple[str, ...]):
     if not isinstance(origins, (list, tuple)) or not all(
         isinstance(origin, str) for origin in origins
@@ -120,6 +141,7 @@ def limits(options: dict[str, int | str]):
 
 
 __all__ = [
+    "api_key",
     "cors",
     "expose",
     "get_session",

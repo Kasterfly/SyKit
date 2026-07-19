@@ -10,6 +10,7 @@
     "session-https-only": false,
     "session-max-age": 1209600,
     "session-store": "",
+    "apikey-store": "",
     "content-security-policy": "",
     "use-dotenv": false,
     "sykit-folder-path": "",

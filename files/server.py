@@ -32,6 +32,7 @@ LOGGER = logging.getLogger("sykit.server")
 if str(APP_DIR) not in sys.path:
     sys.path.insert(1, str(APP_DIR))
 
+from core._apikeys import KEY_HEADER, hash_key, resolve_key_store  # noqa: E402
 from core._endpoints import ENDPOINTS  # noqa: E402
 from core._limits import (  # noqa: E402
     RateLimiter,
@@ -89,6 +90,14 @@ def _load_config() -> dict[str, Any]:
 
 CONFIG = _load_config()
 LIMITER = RateLimiter(ROOT / ".sykit-limits.sqlite3")
+# Resolved only when an endpoint actually requires a key, so apps without
+# keys never create a key store. The default sqlite file lives in the
+# project root (ROOT.parent) and survives rebuilds of built/.
+API_KEY_STORE = (
+    resolve_key_store(CONFIG.get("apikey-store", ""), ROOT.parent)
+    if any(record["metadata"].get("api_key") for record in ENDPOINTS)
+    else None
+)
 
 
 def _positive_integer_setting(name: str, default: int) -> int:
@@ -329,11 +338,42 @@ def _call_values(
     return values
 
 
+async def _check_api_key(
+    request: Request, metadata: dict[str, Any]
+) -> Response | dict[str, Any] | None:
+    """Return an error response, the key record, or None when no key is needed."""
+    requirement = metadata.get("api_key")
+    if not requirement:
+        return None
+    key_value = request.headers.get(KEY_HEADER, "").strip()
+    if not key_value:
+        return _error(401, "A valid API key is required.")
+    try:
+        key_record = await run_in_threadpool(API_KEY_STORE.lookup, hash_key(key_value))
+    except Exception:
+        LOGGER.exception("The API key store is unavailable.")
+        return _error(503, "API keys are temporarily unavailable.")
+    if (
+        not isinstance(key_record, dict)
+        or key_record.get("revoked")
+        or not isinstance(key_record.get("id"), str)
+    ):
+        return _error(401, "A valid API key is required.")
+    granted = key_record.get("scopes")
+    granted = set(granted) if isinstance(granted, list) else set()
+    if set(requirement.get("scopes") or []) - granted:
+        return _error(403, "API key scope denied.")
+    return key_record
+
+
 async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
     metadata = record["metadata"]
     permission_error = _check_permissions(request, metadata)
     if permission_error is not None:
         return permission_error
+    key_record = await _check_api_key(request, metadata)
+    if isinstance(key_record, Response):
+        return key_record
     try:
         client = request.client.host if request.client else ""
         await LIMITER.check(
@@ -341,6 +381,7 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
             metadata.get("limits"),
             request.session,
             client,
+            key_record["id"] if key_record else "",
         )
     except RateLimitExceeded as error:
         return _error(

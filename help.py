@@ -5,6 +5,7 @@ def print_help():
     print("  init   Create src/sykit configuration and a minimal starter app")
     print("  build [--dev]  Generate endpoints and compile the production")
     print("                 application; --dev also runs the built app")
+    print("  keys <generate|list|revoke>  Manage API keys for @api_key endpoints")
     print("  package <add|remove|list|diff>  Manage packages that extend SyKit")
     print("  update [source] [--yes]  Update the SyKit folder to the latest")
     print("                 release, removing and reapplying installed packages")

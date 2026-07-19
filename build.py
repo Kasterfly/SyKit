@@ -42,7 +42,8 @@ DECORATOR_METHODS = {
 }
 CLIENT_DECORATORS = {"expose", "raw"}
 INJECTED_PARAMETERS = {"session", "request"}
-LIMIT_KEYS = {"per-client", "per-session", "site-wide", "per-worker"}
+LIMIT_KEYS = {"per-client", "per-key", "per-session", "site-wide", "per-worker"}
+SCOPE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
 LIMIT_WINDOWS = {"s": 1, "m": 60, "hr": 3600}
 IGNORED_SOURCE_DIRS = {
     ".git",
@@ -220,6 +221,7 @@ class EndpointInfo:
     limits: dict[str, dict[str, int] | None] | None
     hidden: bool = False
     token: str | None = None
+    api_key: dict[str, Any] | None = None
 
     @property
     def client_parameters(self) -> tuple[ParameterInfo, ...]:
@@ -473,6 +475,20 @@ def _parse_limit(value: Any, key: str, path: Path) -> dict[str, int] | None:
     return {"requests": int(match.group(1)), "window": LIMIT_WINDOWS[unit]}
 
 
+def _validate_api_key_scopes(value: Any, path: Path) -> dict[str, Any]:
+    if not isinstance(value, list) or not all(
+        isinstance(scope, str) and SCOPE_PATTERN.fullmatch(scope) for scope in value
+    ):
+        raise BuildError(
+            f"{path}: @api_key expects a list of scope names (letters, "
+            'digits, "_", ".", ":", "-").'
+        )
+    folded = [scope.casefold() for scope in value]
+    if len(set(folded)) != len(folded):
+        raise BuildError(f"{path}: @api_key scopes may not contain duplicates.")
+    return {"scopes": list(value)}
+
+
 def _validate_limits(
     value: Any,
     path: Path,
@@ -615,6 +631,7 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
         cors: tuple[str, ...] | None = None
         endpoint_limits: dict[str, dict[str, int] | None] | None = None
         is_hidden = False
+        api_key_info: dict[str, Any] | None = None
         for decorator in node.decorator_list:
             name = _get_call_name(decorator)
             if isinstance(decorator, (ast.Name, ast.Attribute)):
@@ -637,6 +654,12 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
                             f"{path}:{node.lineno}: only one @hidden decorator is allowed."
                         )
                     is_hidden = True
+                if bare_name == "api_key":
+                    if api_key_info is not None:
+                        raise BuildError(
+                            f"{path}:{node.lineno}: only one @api_key decorator is allowed."
+                        )
+                    api_key_info = {"scopes": []}
             if name == "hidden":
                 raise BuildError(
                     f"{path}:{node.lineno}: @hidden must be used without arguments."
@@ -676,6 +699,15 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
                 endpoint_limits = _validate_limits(
                     _literal_argument(decorator, name, path), path
                 )
+            elif name == "api_key":
+                if api_key_info is not None:
+                    raise BuildError(
+                        f"{path}:{node.lineno}: only one @api_key decorator is allowed."
+                    )
+                decorator = cast(ast.Call, decorator)
+                api_key_info = _validate_api_key_scopes(
+                    _literal_argument(decorator, name, path), path
+                )
 
         if endpoint_kind is None or endpoint_path is None:
             continue
@@ -683,6 +715,24 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
             raise BuildError(
                 f"{path}:{node.lineno}: @hidden cannot be combined with @cors; "
                 "a custom CORS rule would make the endpoint detectable."
+            )
+        if api_key_info is not None:
+            if endpoint_kind != "web_hook":
+                raise BuildError(
+                    f"{path}:{node.lineno}: @api_key is only for @web_hook "
+                    "endpoints; browser calls carry sessions, not keys."
+                )
+            if is_hidden:
+                raise BuildError(
+                    f"{path}:{node.lineno}: @api_key cannot be combined with @hidden."
+                )
+        if (
+            endpoint_limits is not None
+            and endpoint_limits.get("per-key") is not None
+            and api_key_info is None
+        ):
+            raise BuildError(
+                f"{path}:{node.lineno}: a per-key rate limit requires @api_key."
             )
         if endpoint_kind in CLIENT_DECORATORS:
             if node.name in JS_RESERVED_WORDS:
@@ -709,6 +759,7 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
                 cors=cors,
                 limits=endpoint_limits,
                 hidden=is_hidden,
+                api_key=api_key_info,
             )
         )
     return results
@@ -778,6 +829,7 @@ def generate_backend_manifest(endpoints: list[EndpointInfo]) -> str:
             "limits": endpoint.limits,
             "hidden": endpoint.hidden,
             "token": endpoint.token,
+            "api_key": endpoint.api_key,
         }
         python_metadata = repr(metadata)
         lines.extend(

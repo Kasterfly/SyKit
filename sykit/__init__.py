@@ -2,6 +2,7 @@ import sys as _sys
 
 from . import utils as util
 from .utils import (
+    api_key,
     cors,
     expose,
     get_session,
@@ -14,7 +15,7 @@ from .utils import (
     web_hook,
 )
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.
@@ -22,6 +23,7 @@ _sys.modules[f"{__name__}.util"] = util
 
 __all__ = [
     "__version__",
+    "api_key",
     "cors",
     "expose",
     "get_session",
