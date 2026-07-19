@@ -12,6 +12,7 @@ defaults below apply when a key is missing.
 | `max-request-bytes` | `1048576` | Request body size cap |
 | `frontend-packages` | `{}` (locked SyKit defaults) | Optional overrides for the pinned Svelte 5, Vite, and Svelte plugin versions |
 | `cache-svelte` | `true` | Keep the npm cache (`__sykitcache__/`) between builds; `false` removes it after each build |
+| `docker` | `false` | Also write `Dockerfile`, `compose.yaml`, and `.dockerignore` into `built/` on every build ([details](deploy.md)) |
 | `session-https-only` | `false` | Send the session cookie only over HTTPS; turn on in production behind TLS |
 | `session-max-age` | `1209600` (14 days) | Session lifetime in seconds |
 | `session-store` | `""` (signed cookies) | Where session data lives: `""`, `sqlite[:path]`, or a `scheme:target` store added by a package ([details](auth.md#session-storage)) |
