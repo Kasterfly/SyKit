@@ -9,11 +9,13 @@
     "cache-svelte": true,
     "session-https-only": false,
     "session-max-age": 1209600,
+    "session-store": "",
     "content-security-policy": "",
     "use-dotenv": false,
     "sykit-folder-path": "",
 
     "default-perms": {},
+    "page-perms": {},
     "default-CORS": [],
     "default-limits": {
         "per-session": -1,

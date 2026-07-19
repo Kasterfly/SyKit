@@ -14,7 +14,7 @@ from .utils import (
     web_hook,
 )
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.

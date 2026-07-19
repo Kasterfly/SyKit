@@ -59,6 +59,10 @@ def admin_stats(): ...
 The visitor's session must contain every listed key with exactly that value.
 No session (401). Wrong value (403). `@requires(...)` is an alias.
 
+Pages (non-API paths) are gated with the `page-perms` setting, and
+`sykit.auth` turns verified credentials into these session values; see
+[Login and Access](auth.md).
+
 ### `@hidden`
 
 ```python
@@ -129,3 +133,6 @@ request):
 
 - `get_session()`: the visitor's session as a dict
 - `update_session(key, value)`: set a key; passing `""` or `None` removes it
+
+For logging visitors in and out (and hashing their passwords), use
+`sykit.auth`; see [Login and Access](auth.md).

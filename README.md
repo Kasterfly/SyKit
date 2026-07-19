@@ -76,6 +76,8 @@ Commands operate on the current working directory (your project root).
 
 - [Endpoints](docs/endpoints.md): `@expose`, `@raw`, `@web_hook`, sessions,
   permissions, CORS, rate limits
+- [Login and Access](docs/auth.md): password helpers, `login`/`logout`,
+  permission-gated pages, and server-side session stores
 - [Configuration](docs/configuration.md): every `config.json` key, plus
   required environment variables
 - [Packages](docs/packages.md): reversible add-ons that patch the SyKit tool
@@ -94,7 +96,7 @@ python tests/smoke_quickstart.py
 
 ## Status
 
-Beta (`0.4.1`)
+Beta (`0.5.0`)
 
 - Expect breaking changes before 1.0.
 - This is a side-project helper, not a production framework. For production

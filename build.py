@@ -1241,12 +1241,11 @@ def prepare_staging(
         shutil.copy2(license_path, STAGING_DIR / "SYKIT-LICENSE")
     shutil.copy2(TOOL_DIR / "requirements.txt", STAGING_DIR / "requirements.txt")
     shutil.copy2(config_path, STAGING_DIR / "config.json")
-    shutil.copy2(
-        SOURCE_FILES_DIR / "core" / "__init__.py", STAGING_DIR / "core" / "__init__.py"
-    )
-    shutil.copy2(
-        SOURCE_FILES_DIR / "core" / "_limits.py", STAGING_DIR / "core" / "_limits.py"
-    )
+    # Copy every core runtime module so packages can ship extra core files
+    # (session stores, for example) without editing the build. The generated
+    # _endpoints.py below overwrites the placeholder.
+    for source in sorted((SOURCE_FILES_DIR / "core").glob("*.py")):
+        shutil.copy2(source, STAGING_DIR / "core" / source.name)
     (STAGING_DIR / "core" / "_endpoints.py").write_text(
         backend_manifest, encoding="utf-8"
     )

@@ -75,7 +75,9 @@ ENDPOINTS = [
             limits={
                 "per-session": None,
                 "site-wide": None,
-                "per-client": {"requests": 2, "window": 60},
+                # A wide window keeps the probe from flaking when it
+                # straddles a window boundary.
+                "per-client": {"requests": 2, "window": 3600},
                 "per-worker": None,
             },
         ),
@@ -199,6 +201,10 @@ class SecurityRuntimeTests(unittest.TestCase):
                 ROOT / "files" / "core" / "__init__.py",
                 runtime / "core" / "__init__.py",
             )
+            shutil.copy2(
+                ROOT / "files" / "core" / "_sessions.py",
+                runtime / "core" / "_sessions.py",
+            )
             shutil.copytree(ROOT / "sykit", runtime / "app" / "sykit")
             (runtime / "config.json").write_text(
                 json.dumps(
@@ -293,8 +299,8 @@ class BuildSecurityTests(unittest.TestCase):
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_version_is_0_4_1(self) -> None:
-        self.assertEqual(__version__, "0.4.1")
+    def test_version_is_0_5_0(self) -> None:
+        self.assertEqual(__version__, "0.5.0")
 
 
 if __name__ == "__main__":

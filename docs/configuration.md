@@ -13,11 +13,13 @@ defaults below apply when a key is missing.
 | `frontend-packages` | `{}` (locked SyKit defaults) | Optional overrides for the pinned Svelte 5, Vite, and Svelte plugin versions |
 | `cache-svelte` | `true` | Keep the npm cache (`__sykitcache__/`) between builds; `false` removes it after each build |
 | `session-https-only` | `false` | Send the session cookie only over HTTPS; turn on in production behind TLS |
-| `session-max-age` | `1209600` (14 days) | Signed session cookie lifetime in seconds |
+| `session-max-age` | `1209600` (14 days) | Session lifetime in seconds |
+| `session-store` | `""` (signed cookies) | Where session data lives: `""`, `sqlite[:path]`, or a `scheme:target` store added by a package ([details](auth.md#session-storage)) |
 | `content-security-policy` | none | Content-Security-Policy header sent with every response; an empty string disables it |
 | `use-dotenv` | `false` | Load `.env` from the project root at startup (needs `python-dotenv`); build creates the file if missing, protects it on POSIX, and adds it to `.gitignore` |
 | `sykit-folder-path` | `""` | Where the `sykit/` folder lives inside `src/` (relative path; `""` means `src/sykit`, and path "example/" means `src/example/sykit`) |
 | `default-perms` | `{}` | Permissions applied to endpoints without their own `@perms` |
+| `page-perms` | `{}` | Page path prefixes gated by session permissions; denied requests get the same response as a nonexistent page ([details](auth.md#permission-gated-pages)) |
 | `default-CORS` | `[]` | CORS origins applied to endpoints without their own `@cors` |
 | `default-limits` | unlimited | Rate limits applied to endpoints without their own `@limits` ([format](endpoints.md#limits)) |
 

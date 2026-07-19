@@ -17,7 +17,6 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException
 from starlette.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
@@ -39,6 +38,7 @@ from core._limits import (  # noqa: E402
     RateLimitExceeded,
     RateLimitUnavailable,
 )
+from core._sessions import SessionMiddleware, resolve_store  # noqa: E402
 
 from sykit import util as session_util  # noqa: E402
 
@@ -137,6 +137,60 @@ API_CATCHALL_METHODS = [
 ]
 
 
+def _normalize_page_perms() -> tuple[tuple[str, dict[str, Any]], ...]:
+    configured = CONFIG.get("page-perms", {})
+    if not isinstance(configured, dict):
+        raise RuntimeError(
+            'The "page-perms" setting must be an object mapping page path '
+            "prefixes to permissions."
+        )
+    rules: list[tuple[str, dict[str, Any]]] = []
+    seen: set[str] = set()
+    for raw_path, permissions in configured.items():
+        if not isinstance(raw_path, str):
+            raise RuntimeError('"page-perms" keys must be path strings.')
+        path = "/" + raw_path.strip().strip("/")
+        segments = path.strip("/").split("/")
+        if (
+            path == "/"
+            or any(character in path for character in "?#{}\\")
+            or any(
+                character.isspace() or ord(character) < 32 or ord(character) == 127
+                for character in path
+            )
+            or any(segment in {"", ".", ".."} for segment in segments)
+        ):
+            raise RuntimeError(f'Invalid "page-perms" path {raw_path!r}.')
+        if path == API_PREFIX.rstrip("/") or path.startswith(API_PREFIX):
+            raise RuntimeError(
+                f'"page-perms" path {raw_path!r} is under the endpoint '
+                "prefix; use @perms on the endpoints instead."
+            )
+        folded = path.casefold()
+        if folded in seen:
+            raise RuntimeError(f'Duplicate "page-perms" path {raw_path!r}.')
+        seen.add(folded)
+        if not isinstance(permissions, dict) or set(permissions) - {"Session"}:
+            raise RuntimeError(
+                f'"page-perms" for {raw_path!r} must be an object with a "Session" key.'
+            )
+        required = permissions.get("Session")
+        if (
+            not isinstance(required, dict)
+            or not required
+            or not all(isinstance(key, str) and key for key in required)
+        ):
+            raise RuntimeError(
+                f'"page-perms" for {raw_path!r} needs a non-empty "Session" '
+                "object; without one the page would not be protected."
+            )
+        rules.append((folded, dict(required)))
+    return tuple(rules)
+
+
+PAGE_PERMS = _normalize_page_perms()
+
+
 def _error(
     status_code: int,
     message: str,
@@ -221,17 +275,32 @@ def _check_permissions(request: Request, metadata: dict[str, Any]) -> Response |
     return None
 
 
-def _session_permits(request: Request, metadata: dict[str, Any]) -> bool:
-    permissions = metadata.get("permissions") or {}
-    required_session = permissions.get("Session") or {}
-    if not required_session:
-        return True
+def _session_satisfies(request: Request, required_session: dict[str, Any]) -> bool:
     if SESSION_COOKIE not in request.cookies or not request.session:
         return False
     session = request.session
     return all(
         key in session and session[key] == expected
         for key, expected in required_session.items()
+    )
+
+
+def _session_permits(request: Request, metadata: dict[str, Any]) -> bool:
+    permissions = metadata.get("permissions") or {}
+    required_session = permissions.get("Session") or {}
+    if not required_session:
+        return True
+    return _session_satisfies(request, required_session)
+
+
+def _page_allowed(request: Request, candidate: Path) -> bool:
+    if not PAGE_PERMS:
+        return True
+    relative = "/" + candidate.relative_to(STATIC_ROOT).as_posix().casefold()
+    return all(
+        _session_satisfies(request, required)
+        for prefix, required in PAGE_PERMS
+        if relative == prefix or relative.startswith(prefix + "/")
     )
 
 
@@ -377,12 +446,22 @@ async def _spa(request: Request) -> Response:
     if candidate != STATIC_ROOT and STATIC_ROOT not in candidate.parents:
         return _error(404, "File not found.")
     if candidate.is_file():
+        # A protected page must answer exactly like a page that does not
+        # exist, so a failed check serves the same SPA fallback. The match
+        # runs on the resolved path so case or short-name aliases cannot
+        # slip past the prefix.
+        if not _page_allowed(request, candidate):
+            return _spa_fallback()
         cache_control = (
             "public, max-age=31536000, immutable"
             if requested.startswith("assets/")
             else "no-cache"
         )
         return FileResponse(candidate, headers={"Cache-Control": cache_control})
+    return _spa_fallback()
+
+
+def _spa_fallback() -> Response:
     index = STATIC_DIR / "index.html"
     if index.is_file():
         return FileResponse(index, headers={"Cache-Control": "no-cache"})
@@ -762,14 +841,15 @@ def create_app():
     if not isinstance(https_only, bool):
         raise RuntimeError('The "session-https-only" setting must be true or false.')
     max_age = _positive_integer_setting("session-max-age", 1_209_600)
+    store = resolve_store(CONFIG.get("session-store", ""), ROOT)
     application = Starlette(routes=_routes())
     application = SessionMiddleware(
         application,
-        secret_key=secret,
-        session_cookie=SESSION_COOKIE,
-        same_site="lax",
-        https_only=https_only,
+        secret=secret,
+        store=store,
+        cookie_name=SESSION_COOKIE,
         max_age=max_age,
+        https_only=https_only,
     )
     application = RequestBodyLimitMiddleware(application, MAX_REQUEST_BYTES)
     rules, default_origins, origins = _cors_policy()
