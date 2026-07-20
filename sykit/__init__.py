@@ -1,6 +1,7 @@
 import sys as _sys
 
 from . import utils as util
+from .errors import register_error_hook
 from .utils import (
     api_key,
     cors,
@@ -15,7 +16,7 @@ from .utils import (
     web_hook,
 )
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.
@@ -31,6 +32,7 @@ __all__ = [
     "limits",
     "perms",
     "raw",
+    "register_error_hook",
     "requires",
     "update_session",
     "util",

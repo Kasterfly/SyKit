@@ -151,3 +151,7 @@ request):
 
 For logging visitors in and out (and hashing their passwords), use
 `sykit.auth`; see [Login and Access](auth.md).
+
+Unhandled endpoint exceptions return a generic 500 response. Apps and
+packages can observe the original exception through SyKit's error hook;
+see [Observability](observability.md#error-hook).

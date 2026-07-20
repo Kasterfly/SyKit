@@ -13,7 +13,8 @@ then also writes three files into `built/`:
   `host-port`, runs `python main.py`.
 - `compose.yaml`: builds the image, publishes the port, passes
   `SYKIT_SESSION_SECRET` through from the host environment (Compose
-  refuses to start without it), restarts unless stopped.
+  refuses to start without it), probes the configured `health-path`,
+  and restarts unless stopped.
 - `.dockerignore`: keeps `__pycache__` and the local sqlite state files
   out of the image.
 
@@ -32,6 +33,8 @@ Two settings matter in containers:
 - `"allowed-hosts"` must include the hostname clients use to reach the
   container (for a published local port, the defaults already cover
   `localhost`).
+- `"health-path"` is used by the generated Compose healthcheck. The
+  default `/healthz` works without further configuration.
 
 ## State in containers
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import ipaddress
 import json
@@ -7,6 +8,7 @@ import logging
 import os
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -41,6 +43,7 @@ from core._limits import (  # noqa: E402
 )
 from core._sessions import SessionMiddleware, resolve_store  # noqa: E402
 
+from sykit import errors as error_hooks  # noqa: E402
 from sykit import util as session_util  # noqa: E402
 
 
@@ -100,6 +103,23 @@ API_KEY_STORE = (
 )
 
 
+def _choice_setting(name: str, default: str, choices: set[str]) -> str:
+    value = CONFIG.get(name, default)
+    if not isinstance(value, str) or value.upper() not in choices:
+        expected = ", ".join(sorted(choice.lower() for choice in choices))
+        raise RuntimeError(f'The "{name}" setting must be one of: {expected}.')
+    return value.upper()
+
+
+LOG_FORMAT = _choice_setting("log-format", "text", {"TEXT", "JSON"}).lower()
+LOG_LEVEL = _choice_setting(
+    "log-level",
+    "INFO",
+    {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"},
+)
+LOGGER.setLevel(getattr(logging, LOG_LEVEL))
+
+
 def _positive_integer_setting(name: str, default: int) -> int:
     value = CONFIG.get(name, default)
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
@@ -131,6 +151,39 @@ def _api_prefix() -> str:
 
 
 API_PREFIX = _api_prefix()
+
+
+def _health_path_setting(name: str, default: str, *, optional: bool = False) -> str:
+    configured = CONFIG.get(name, default)
+    if not isinstance(configured, str):
+        raise RuntimeError(f'The "{name}" setting must be a string.')
+    text = configured.strip()
+    if optional and not text:
+        return ""
+    path = "/" + text.strip("/")
+    segments = path.strip("/").split("/")
+    if (
+        path == "/"
+        or not path.isascii()
+        or any(character in path for character in "?#{}\\")
+        or any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in path
+        )
+        or any(segment in {"", ".", ".."} for segment in segments)
+    ):
+        raise RuntimeError(f'Invalid "{name}" path {configured!r}.')
+    api_root = API_PREFIX.rstrip("/")
+    if path == api_root or path.startswith(API_PREFIX):
+        raise RuntimeError(f'The "{name}" path must stay outside the endpoint prefix.')
+    return path
+
+
+HEALTH_PATH = _health_path_setting("health-path", "/healthz")
+READINESS_PATH = _health_path_setting("readiness-path", "", optional=True)
+if READINESS_PATH == HEALTH_PATH:
+    raise RuntimeError('The "health-path" and "readiness-path" settings must differ.')
+
 HIDDEN_MANIFEST_ENDPOINT = "__sykit_manifest__"
 API_CATCHALL_METHODS = [
     "GET",
@@ -430,12 +483,16 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
             str(error.detail),
             dict(error.headers or {}),
         )
-    except Exception:
+    except Exception as error:
         LOGGER.exception(
             "Unhandled exception in %s.%s",
             metadata.get("module"),
             metadata.get("name"),
         )
+        try:
+            await error_hooks._notify_error(error, request)
+        except Exception:
+            LOGGER.exception("The registered error hook failed.")
         return _error(500, "The endpoint failed.")
 
 
@@ -675,6 +732,153 @@ def _host_allowed(hostname: str, patterns: tuple[str, ...]) -> bool:
     )
 
 
+def _safe_log_text(value: Any, maximum: int = 2048) -> str:
+    text = str(value)
+    cleaned = "".join(
+        character if ord(character) >= 32 and ord(character) != 127 else "?"
+        for character in text
+    )
+    return cleaned[:maximum]
+
+
+def _caller_identity(scope: dict[str, Any]) -> str:
+    raw_key = b""
+    for name, value in scope.get("headers", []):
+        if name.lower() == KEY_HEADER.encode("ascii"):
+            raw_key = value.strip()
+    if raw_key:
+        fingerprint = hashlib.sha256(raw_key).hexdigest()[:12]
+        return f"api_key:{fingerprint}"
+    if scope.get("session"):
+        return "session"
+    return "anonymous"
+
+
+class AccessLogMiddleware:
+    def __init__(self, application) -> None:
+        self.application = application
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.application(scope, receive, send)
+            return
+        started = time.perf_counter()
+        status = 500
+
+        async def tracked_send(message) -> None:
+            nonlocal status
+            if message.get("type") == "http.response.start":
+                status = int(message.get("status", 500))
+            await send(message)
+
+        try:
+            await self.application(scope, receive, tracked_send)
+        finally:
+            duration = round((time.perf_counter() - started) * 1000, 3)
+            method = _safe_log_text(scope.get("method", ""), 32).upper()
+            path = _safe_log_text(scope.get("path", ""))
+            caller = _caller_identity(scope)
+            if LOG_FORMAT == "json":
+                LOGGER.info(
+                    "%s",
+                    json.dumps(
+                        {
+                            "caller": caller,
+                            "duration_ms": duration,
+                            "event": "request",
+                            "method": method,
+                            "path": path,
+                            "status": status,
+                        },
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                )
+            else:
+                LOGGER.info(
+                    "request method=%s path=%s status=%d duration_ms=%.3f caller=%s",
+                    method,
+                    json.dumps(path, ensure_ascii=True),
+                    status,
+                    duration,
+                    caller,
+                )
+
+
+class HealthMiddleware:
+    def __init__(
+        self,
+        application,
+        health_path: str,
+        readiness_path: str,
+        session_store,
+        api_key_store,
+    ) -> None:
+        self.application = application
+        self.health_path = health_path
+        self.readiness_path = readiness_path
+        self.session_store = session_store
+        self.api_key_store = api_key_store
+
+    async def _readiness(self) -> JSONResponse:
+        checks: dict[str, str] = {}
+        probes = (
+            (
+                "sessions",
+                self.session_store,
+                "load",
+                "__sykit_readiness_probe__",
+            ),
+            (
+                "api_keys",
+                self.api_key_store,
+                "lookup",
+                hash_key("sykit-readiness-probe"),
+            ),
+        )
+        ready = True
+        for name, store, method_name, argument in probes:
+            if store is None:
+                continue
+            try:
+                await run_in_threadpool(getattr(store, method_name), argument)
+            except Exception:
+                ready = False
+                checks[name] = "unavailable"
+                LOGGER.exception("Readiness check failed for the %s store.", name)
+            else:
+                checks[name] = "ok"
+        return JSONResponse(
+            {"status": "ready" if ready else "unavailable", "checks": checks},
+            status_code=200 if ready else 503,
+        )
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.application(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        is_liveness = path == self.health_path
+        is_readiness = bool(self.readiness_path) and path == self.readiness_path
+        if not is_liveness and not is_readiness:
+            await self.application(scope, receive, send)
+            return
+        method = scope.get("method", "GET").upper()
+        if method not in {"GET", "HEAD"}:
+            response = _error(
+                405,
+                "Method not allowed.",
+                {"Allow": "GET, HEAD"},
+            )
+        elif is_liveness:
+            response = JSONResponse({"status": "ok"})
+        else:
+            response = await self._readiness()
+        if method == "HEAD":
+            response.body = b""
+        await response(scope, receive, send)
+
+
 class HostPolicyMiddleware:
     def __init__(self, application, allowed_hosts: tuple[str, ...]) -> None:
         self.application = application
@@ -907,6 +1111,13 @@ def create_app():
         rules,
         default_origins,
     )
+    application = HealthMiddleware(
+        application,
+        HEALTH_PATH,
+        READINESS_PATH,
+        store,
+        API_KEY_STORE,
+    )
     allowed_hosts = _normalize_allowed_hosts(
         CONFIG.get("allowed-hosts", ["127.0.0.1", "localhost", "::1"])
     )
@@ -915,6 +1126,7 @@ def create_app():
     if csp is not None and not isinstance(csp, str):
         raise RuntimeError('The "content-security-policy" setting must be a string.')
     application = SecurityHeadersMiddleware(application, csp)
+    application = AccessLogMiddleware(application)
     return application
 
 
@@ -934,10 +1146,18 @@ def run() -> None:
         host=host.strip(),
         port=port,
         workers=workers,
+        log_level=LOG_LEVEL.lower(),
+        access_log=False,
         # Direct clients must not spoof the scheme or their address through
         # X-Forwarded-* headers. Re-enable only behind a trusted reverse proxy.
         proxy_headers=False,
     )
 
 
-__all__ = ["app", "create_app", "run"]
+__all__ = [
+    "AccessLogMiddleware",
+    "HealthMiddleware",
+    "app",
+    "create_app",
+    "run",
+]

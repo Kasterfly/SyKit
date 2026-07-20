@@ -13,6 +13,10 @@ defaults below apply when a key is missing.
 | `frontend-packages` | `{}` (locked SyKit defaults) | Optional overrides for the pinned Svelte 5, Vite, and Svelte plugin versions |
 | `cache-svelte` | `true` | Keep the npm cache (`__sykitcache__/`) between builds; `false` removes it after each build |
 | `docker` | `false` | Also write `Dockerfile`, `compose.yaml`, and `.dockerignore` into `built/` on every build ([details](deploy.md)) |
+| `health-path` | `"/healthz"` | Liveness route that does not load sessions or query stores ([details](observability.md#health-routes)) |
+| `readiness-path` | `""` (disabled) | Optional readiness route that probes the active session and API key stores ([details](observability.md#health-routes)) |
+| `log-format` | `"text"` | Request log format: `"text"` or `"json"` ([details](observability.md#access-logging)) |
+| `log-level` | `"INFO"` | Minimum server log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` |
 | `session-https-only` | `false` | Send the session cookie only over HTTPS; turn on in production behind TLS |
 | `session-max-age` | `1209600` (14 days) | Session lifetime in seconds |
 | `session-store` | `""` (signed cookies) | Where session data lives: `""`, `sqlite[:path]`, or a `scheme:target` store added by a package ([details](auth.md#session-storage)) |

@@ -84,6 +84,8 @@ Commands operate on the current working directory (your project root).
   scopes, and per-key rate limits
 - [Deploying](docs/deploy.md): the docker toggle, Compose, Swarm notes,
   and state in containers
+- [Observability](docs/observability.md): liveness and readiness routes,
+  request logs, and the endpoint error hook
 - [Configuration](docs/configuration.md): every `config.json` key, plus
   required environment variables
 - [Packages](docs/packages.md): reversible add-ons that patch the SyKit tool
@@ -102,7 +104,7 @@ python tests/smoke_quickstart.py
 
 ## Status
 
-Beta (`0.8.0`)
+Beta (`0.9.0`)
 
 - Expect breaking changes before 1.0.
 - This is a side-project helper, not a production framework. For production

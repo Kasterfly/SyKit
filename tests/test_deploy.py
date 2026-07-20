@@ -10,6 +10,29 @@ from pathlib import Path
 import build
 
 
+class HealthPathValidationTests(unittest.TestCase):
+    def test_normalizes_health_paths(self) -> None:
+        self.assertEqual(
+            build.normalize_health_path("status/live/", "health-path", "/api/"),
+            "/status/live",
+        )
+        self.assertEqual(
+            build.normalize_health_path(
+                "",
+                "readiness-path",
+                "/api/",
+                optional=True,
+            ),
+            "",
+        )
+
+    def test_rejects_unsafe_or_api_paths(self) -> None:
+        for path in ("/", "/api/health", "/bad?query", "/two//parts"):
+            with self.subTest(path=path):
+                with self.assertRaises(build.BuildError):
+                    build.normalize_health_path(path, "health-path", "/api/")
+
+
 class DockerFileGenerationTests(unittest.TestCase):
     def test_dockerfile_content(self) -> None:
         content = build.generate_dockerfile(8443)
@@ -25,6 +48,13 @@ class DockerFileGenerationTests(unittest.TestCase):
         self.assertIn("SYKIT_SESSION_SECRET", content)
         self.assertIn("${SYKIT_SESSION_SECRET:?", content)
         self.assertIn("restart: unless-stopped", content)
+        self.assertIn("healthcheck:", content)
+        self.assertIn("http://127.0.0.1:8443/healthz", content)
+
+    def test_compose_uses_configured_health_path(self) -> None:
+        content = build.generate_compose(8443, "/status/live")
+        self.assertIn("http://127.0.0.1:8443/status/live", content)
+        self.assertNotIn("/healthz", content)
 
     def test_dockerignore_excludes_state_files(self) -> None:
         for entry in (
