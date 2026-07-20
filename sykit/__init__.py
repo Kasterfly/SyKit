@@ -19,7 +19,7 @@ from .utils import (
     web_hook,
 )
 
-__version__ = "0.12.0"
+__version__ = "0.12.1"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.
