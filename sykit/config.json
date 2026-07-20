@@ -10,6 +10,7 @@
     "max-request-bytes": 1048576,
     "cache-svelte": true,
     "docker": false,
+    "trust-proxy": false,
     "health-path": "/healthz",
     "readiness-path": "",
     "log-format": "text",

@@ -33,6 +33,10 @@ def limited(session):
     return {"ok": True}
 
 
+def hook():
+    return {"ok": True}
+
+
 def _metadata(**overrides):
     metadata = {
         "kind": "expose",
@@ -45,6 +49,7 @@ def _metadata(**overrides):
         "limits": {},
         "hidden": False,
         "token": None,
+        "api_key": None,
     }
     metadata.update(overrides)
     return metadata
@@ -83,6 +88,23 @@ ENDPOINTS = [
         ),
         "function": limited,
     },
+    {
+        "metadata": _metadata(
+            endpoint="hook",
+            name="hook",
+            kind="web_hook",
+            parameters=[],
+            api_key={"scopes": []},
+            limits={
+                "per-session": None,
+                "site-wide": None,
+                "per-client": {"requests": 2, "window": 3600},
+                "per-worker": None,
+                "per-key": None,
+            },
+        ),
+        "function": hook,
+    },
 ]
 """
 
@@ -91,11 +113,12 @@ import asyncio
 import json
 
 import server
+from core import _apikeys
 
 
-async def request(method, path, body=None, cookie=None, client=("127.0.0.1", 12345)):
+async def request(method, path, body=None, cookie=None, client=("127.0.0.1", 12345), headers=None):
     payload = json.dumps(body).encode("utf-8") if body is not None else b""
-    headers = [(b"host", b"127.0.0.1")]
+    headers = [(b"host", b"127.0.0.1")] + list(headers or [])
     if body is not None:
         headers.append((b"content-type", b"application/json"))
     if cookie:
@@ -137,8 +160,10 @@ def header(headers, name):
 
 async def main():
     # Hidden endpoints stay indistinguishable from missing ones on every
-    # method, including OPTIONS and TRACE (previously leaked via Allow).
-    for method in ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "TRACE", "HEAD"):
+    # method, standard or not (previously leaked via Allow on OPTIONS and
+    # TRACE, then via Starlette's 405 on non-standard method tokens).
+    for method in ("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "TRACE",
+                   "HEAD", "CONNECT", "QUERY"):
         body = {} if method in {"POST", "PUT", "PATCH"} else None
         status, _h, hidden = await request(method, "/api/admin_tool", body)
         m_status, _h, missing = await request(method, "/api/does_not_exist", body)
@@ -169,6 +194,21 @@ async def main():
     status, _h, _ = await request("POST", "/api/limited", {}, cookie=cookie)
     assert status == 429, status
 
+    # Failed API-key attempts consume the per-client budget: two 401s, then
+    # the limiter answers 429 even though the key presented is invalid, and
+    # a valid key arrives over budget too.
+    key, _record = _apikeys.issue_key(server.API_KEY_STORE, "probe")
+    wrong = [(b"x-api-key", b"sykit_00000000_wrong")]
+    statuses = []
+    for _ in range(3):
+        status, _h, _ = await request("POST", "/api/hook", {}, headers=wrong)
+        statuses.append(status)
+    assert statuses == [401, 401, 429], statuses
+    status, _h, _ = await request(
+        "POST", "/api/hook", {}, headers=[(b"x-api-key", key.encode("ascii"))]
+    )
+    assert status == 429, status
+
 
 asyncio.run(main())
 
@@ -182,6 +222,9 @@ def capture_run(*_args, **kwargs):
 server.uvicorn.run = capture_run
 server.run()
 assert run_arguments["proxy_headers"] is False
+server.CONFIG["trust-proxy"] = True
+server.run()
+assert run_arguments["proxy_headers"] is True
 """
 
 
@@ -219,6 +262,7 @@ class SecurityRuntimeTests(unittest.TestCase):
                         "allowed-hosts": ["127.0.0.1"],
                         "session-max-age": 60,
                         "content-security-policy": "default-src 'self'",
+                        "apikey-store": f"sqlite:{runtime / '.test-keys.sqlite3'}",
                     }
                 ),
                 encoding="utf-8",
@@ -305,8 +349,8 @@ class BuildSecurityTests(unittest.TestCase):
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_version_is_0_12_1(self) -> None:
-        self.assertEqual(__version__, "0.12.1")
+    def test_version_is_0_12_2(self) -> None:
+        self.assertEqual(__version__, "0.12.2")
 
 
 if __name__ == "__main__":

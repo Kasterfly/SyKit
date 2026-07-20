@@ -295,6 +295,10 @@ API_CATCHALL_METHODS = [
     "OPTIONS",
     "TRACE",
 ]
+# The catch-all route can only list known methods. Any other method token
+# (CONNECT, QUERY, ...) must meet the same 404 at the middleware layer, or
+# Starlette's partial-match 405 "Allow" header reveals hidden endpoints.
+STANDARD_METHODS = frozenset(API_CATCHALL_METHODS)
 
 
 def _normalize_page_perms() -> tuple[tuple[str, dict[str, Any]], ...]:
@@ -514,13 +518,26 @@ def _check_permissions(request: Request, metadata: dict[str, Any]) -> Response |
     # A hidden endpoint answers exactly like a nonexistent one, so a failed
     # permission check must not reveal that the route exists.
     hidden = bool(metadata.get("hidden"))
+    denied: Response | None = None
     if SESSION_COOKIE not in request.cookies or not request.session:
-        return _not_found() if hidden else _error(401, "A valid session is required.")
-    session = request.session
-    for key, expected in required_session.items():
-        if key not in session or session[key] != expected:
-            return _not_found() if hidden else _error(403, "Session permission denied.")
-    return None
+        denied = _not_found() if hidden else _error(401, "A valid session is required.")
+    else:
+        session = request.session
+        for key, expected in required_session.items():
+            if key not in session or session[key] != expected:
+                denied = (
+                    _not_found()
+                    if hidden
+                    else _error(403, "Session permission denied.")
+                )
+                break
+    if denied is not None:
+        LOGGER.info(
+            "Session permission check failed on %s (%d).",
+            metadata.get("endpoint"),
+            denied.status_code,
+        )
+    return denied
 
 
 def _session_satisfies(request: Request, required_session: dict[str, Any]) -> bool:
@@ -651,6 +668,10 @@ async def _sse_events(
             task_api._reset_enqueuer(task_token)
 
 
+def _api_key_fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
 async def _check_api_key(
     request: Request, metadata: dict[str, Any]
 ) -> Response | dict[str, Any] | None:
@@ -671,10 +692,20 @@ async def _check_api_key(
         or key_record.get("revoked")
         or not isinstance(key_record.get("id"), str)
     ):
+        LOGGER.warning(
+            "Rejected API key %s on %s.",
+            _api_key_fingerprint(key_value),
+            metadata.get("endpoint"),
+        )
         return _error(401, "A valid API key is required.")
     granted = key_record.get("scopes")
     granted = set(granted) if isinstance(granted, list) else set()
     if set(requirement.get("scopes") or []) - granted:
+        LOGGER.warning(
+            "API key %s denied scopes on %s.",
+            _api_key_fingerprint(key_value),
+            metadata.get("endpoint"),
+        )
         return _error(403, "API key scope denied.")
     return key_record
 
@@ -686,11 +717,13 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
             return _not_found()
         return _error(405, "SSE endpoints require GET.", {"Allow": "GET"})
     permission_error = _check_permissions(request, metadata)
-    if permission_error is not None:
-        return permission_error
-    key_record = await _check_api_key(request, metadata)
-    if isinstance(key_record, Response):
-        return key_record
+    key_result = await _check_api_key(request, metadata)
+    key_record = key_result if isinstance(key_result, dict) else None
+    # Rate limiting runs before the authentication errors are returned, so
+    # probing with a bad key or no session still consumes budget. A hidden
+    # endpoint is the exception: its failed checks must keep answering the
+    # same 404 as a nonexistent route, never a revealing 429 or 503.
+    hidden_denied = permission_error is not None and bool(metadata.get("hidden"))
     try:
         client = request.client.host if request.client else ""
         await LIMITER.check(
@@ -701,14 +734,27 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
             key_record["id"] if key_record else "",
         )
     except RateLimitExceeded as error:
+        if hidden_denied:
+            return permission_error
+        LOGGER.info(
+            "Rate limit exceeded on %s for %s.",
+            metadata.get("endpoint"),
+            _safe_log_text(client, 64) or "unknown",
+        )
         return _error(
             429,
             "Rate limit exceeded.",
             {"Retry-After": str(error.retry_after)},
         )
     except RateLimitUnavailable:
+        if hidden_denied:
+            return permission_error
         LOGGER.exception("The shared rate-limit store is unavailable.")
         return _error(503, "Rate limiting is temporarily unavailable.")
+    if permission_error is not None:
+        return permission_error
+    if isinstance(key_result, Response):
+        return key_result
     try:
         async with _provided_values(request, metadata) as provided:
             runtime_session = (
@@ -1194,6 +1240,29 @@ class HealthMiddleware:
         await response(scope, receive, send)
 
 
+class ApiMethodGuardMiddleware:
+    """Answer non-standard API methods with the shared 404.
+
+    The route-level catch-all can only list known methods, so an unlisted
+    method token would otherwise fall through to Starlette's partial-match
+    405, whose "Allow" header differs between real and nonexistent paths.
+    """
+
+    def __init__(self, application) -> None:
+        self.application = application
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            method = str(scope.get("method", "")).upper()
+            path = scope.get("path", "")
+            is_api = path == API_PREFIX.rstrip("/") or path.startswith(API_PREFIX)
+            if is_api and method not in STANDARD_METHODS:
+                response = _not_found()
+                await response(scope, receive, send)
+                return
+        await self.application(scope, receive, send)
+
+
 class HostPolicyMiddleware:
     def __init__(self, application, allowed_hosts: tuple[str, ...]) -> None:
         self.application = application
@@ -1336,6 +1405,10 @@ class EndpointCORSPolicyMiddleware:
             is_api = path == api_root or path.startswith(API_PREFIX)
             fetch_site = headers.get(b"sec-fetch-site", b"").lower()
             if is_api and fetch_site == b"cross-site" and not raw_origin:
+                LOGGER.warning(
+                    "Rejected a cross-site API request without an Origin on %s.",
+                    _safe_log_text(path),
+                )
                 response = _error(403, "Cross-site API request is not allowed.")
                 await response(scope, receive, send)
                 return
@@ -1344,6 +1417,11 @@ class EndpointCORSPolicyMiddleware:
                 canonical_origin = _canonical_origin(origin)
                 allowed = self._allowed_origins(scope)
                 if canonical_origin not in allowed and not _same_origin(scope, origin):
+                    LOGGER.warning(
+                        "Rejected origin %s on %s.",
+                        _safe_log_text(origin),
+                        _safe_log_text(path),
+                    )
                     response = _error(403, "Origin is not allowed.")
                     await response(scope, receive, send)
                     return
@@ -1428,6 +1506,7 @@ def create_app():
 
     application = Starlette(routes=_routes(), lifespan=lifespan)
     application.state.task_manager = task_manager
+    application = ApiMethodGuardMiddleware(application)
     application = SessionMiddleware(
         application,
         secret=secret,
@@ -1462,6 +1541,22 @@ def create_app():
     allowed_hosts = _normalize_allowed_hosts(
         CONFIG.get("allowed-hosts", ["127.0.0.1", "localhost", "::1"])
     )
+    if not https_only and any(
+        pattern not in {"127.0.0.1", "localhost", "::1", "*.localhost"}
+        for pattern in allowed_hosts
+    ):
+        LOGGER.warning(
+            'The "session-https-only" setting is off but "allowed-hosts" is not '
+            "loopback-only; session cookies will travel unencrypted over HTTP."
+        )
+    if store is None and any(
+        (record["metadata"].get("limits") or {}).get("per-session")
+        for record in ENDPOINTS
+    ):
+        LOGGER.warning(
+            'Signed-cookie sessions make "per-session" rate limits easy to '
+            'reset; configure "session-store" or prefer "per-client".'
+        )
     application = HostPolicyMiddleware(application, allowed_hosts)
     csp = CONFIG.get("content-security-policy")
     if csp is not None and not isinstance(csp, str):
@@ -1482,6 +1577,9 @@ def run() -> None:
     if port > 65535:
         raise RuntimeError('The "host-port" setting must be at most 65535.')
     workers = _positive_integer_setting("workers", 1)
+    trust_proxy = CONFIG.get("trust-proxy", False)
+    if not isinstance(trust_proxy, bool):
+        raise RuntimeError('The "trust-proxy" setting must be true or false.')
     uvicorn.run(
         "server:app",
         host=host.strip(),
@@ -1490,8 +1588,11 @@ def run() -> None:
         log_level=LOG_LEVEL.lower(),
         access_log=False,
         # Direct clients must not spoof the scheme or their address through
-        # X-Forwarded-* headers. Re-enable only behind a trusted reverse proxy.
-        proxy_headers=False,
+        # X-Forwarded-* headers, so proxy headers stay off by default. With
+        # "trust-proxy" on, uvicorn honors them only from loopback clients
+        # unless FORWARDED_ALLOW_IPS says otherwise; enable it only when the
+        # app is reachable solely through a trusted reverse proxy.
+        proxy_headers=trust_proxy,
     )
 
 

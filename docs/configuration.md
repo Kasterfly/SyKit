@@ -15,16 +15,17 @@ defaults below apply when a key is missing.
 | `frontend-packages` | `{}` (locked SyKit defaults) | Optional overrides for the pinned Svelte 5, Vite, and Svelte plugin versions |
 | `cache-svelte` | `true` | Keep the npm cache (`__sykitcache__/`) between builds; `false` removes it after each build |
 | `docker` | `false` | Also write `Dockerfile`, `compose.yaml`, and `.dockerignore` into `built/` on every build ([details](deploy.md)) |
+| `trust-proxy` | `false` | Trust `X-Forwarded-*` headers from loopback proxies (or `$FORWARDED_ALLOW_IPS`); enable only behind a trusted reverse proxy ([details](#reverse-proxies)) |
 | `health-path` | `"/healthz"` | Liveness route that does not load sessions or query stores ([details](observability.md#health-routes)) |
 | `readiness-path` | `""` (disabled) | Optional readiness route that probes the active session and API key stores ([details](observability.md#health-routes)) |
 | `log-format` | `"text"` | Request log format: `"text"` or `"json"` ([details](observability.md#access-logging)) |
 | `log-level` | `"INFO"` | Minimum server log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, or `CRITICAL` |
-| `session-https-only` | `false` | Send the session cookie only over HTTPS; turn on in production behind TLS |
+| `session-https-only` | `false` | Send the session cookie only over HTTPS; turn on in production behind TLS (the server warns at startup when it is off but `allowed-hosts` is not loopback-only) |
 | `session-max-age` | `1209600` (14 days) | Session lifetime in seconds |
 | `session-store` | `""` (signed cookies) | Where session data lives: `""`, `sqlite[:path]`, or a `scheme:target` store added by a package ([details](auth.md#session-storage)) |
 | `apikey-store` | `""` (project-root sqlite) | Where API keys live: `""`, `sqlite:path`, or a `scheme:target` store added by a package ([details](apikeys.md#storage)) |
 | `task-store` | `""` (project-root sqlite) | Where background calls live: `""`, `sqlite:path`, or a `scheme:target` store added by a package ([details](background-tasks.md#task-stores)) |
-| `content-security-policy` | none | Content-Security-Policy header sent with every response; an empty string disables it |
+| `content-security-policy` | none | Content-Security-Policy header sent with every response; an empty string disables it. `default-src 'self'` is a good starting point for most apps |
 | `use-dotenv` | `false` | Load `.env` from the project root at startup (needs `python-dotenv`); build creates the file if missing, protects it on POSIX, and adds it to `.gitignore` |
 | `sykit-folder-path` | `""` | Where the `sykit/` folder lives inside `src/` (relative path; `""` means `src/sykit`, and path "example/" means `src/example/sykit`) |
 | `default-perms` | `{}` | Permissions applied to endpoints without their own `@perms` |
@@ -41,7 +42,9 @@ defaults below apply when a key is missing.
 With `use-dotenv` enabled it can live in the project-root `.env` instead of
 the shell environment. Build creates `.env` from `.env.example` when needed,
 adds `.env` to the project `.gitignore`, and uses owner-only permissions on
-POSIX. `build --dev` generates a temporary secret when neither provides one.
+POSIX. On Windows the file keeps the directory's ACL instead, so review who
+can read it on shared machines. `build --dev` generates a temporary secret
+when neither provides one.
 
 ## Frontend toolchain
 
@@ -55,10 +58,26 @@ before installing frontend dependencies.
 
 ## Reverse proxies
 
-SyKit's built-in Uvicorn launch does not trust proxy headers. This prevents a
-direct client from forging its address or request scheme. If the app is only
-reachable through a trusted reverse proxy, start Uvicorn from `built/` with
-proxy handling enabled and name only that proxy:
+SyKit's built-in Uvicorn launch does not trust proxy headers by default.
+This prevents a direct client from forging its address or request scheme.
+Two features depend on those values being correct:
+
+- `per-client` rate limits use the client address; without proxy headers
+  every visitor shares the proxy's bucket.
+- The same-origin check compares each `Origin` against the request scheme
+  and `Host`. Behind a TLS-terminating proxy the app sees `http` while
+  browsers send `Origin: https://...`, so same-origin calls are rejected with
+  `403 {"error":"Origin is not allowed."}` until the scheme is forwarded.
+
+If the app is only reachable through a trusted reverse proxy, set
+`"trust-proxy": true` in `config.json` and rebuild. The built-in launch then
+honors `X-Forwarded-*` headers from loopback proxies only (or from the
+addresses in the `FORWARDED_ALLOW_IPS` environment variable). Terminate TLS
+at the proxy so only that proxy can reach the app; a direct client must
+never be able to set these headers itself.
+
+Alternatively, start Uvicorn from `built/` with proxy handling enabled and
+name only that proxy:
 
 ```bash
 python -m uvicorn server:app --proxy-headers --forwarded-allow-ips="127.0.0.1"

@@ -54,6 +54,13 @@ key its own bucket, so one caller cannot exhaust another's budget. It
 requires `@api_key` on the endpoint; build refuses it elsewhere. The
 other scopes work on keyed endpoints too.
 
+Rate limits are checked before the key is accepted or rejected: requests
+with a missing or invalid key consume the `per-client` and `site-wide`
+budgets, so key probing throttles like any other abuse. An endpoint with
+only a `per-key` limit cannot throttle failed keys (there is no valid key
+to count against), so pair keyed endpoints with a `per-client` budget or a
+proxy-level limit.
+
 ## Storage
 
 By default keys live in `.sykit-apikeys.sqlite3` in the project root,
@@ -92,5 +99,9 @@ against any store, so provider packages get the CLI for free.
   and treat a key like a password.
 - Only hashes are stored; the plaintext key exists once, at generation.
 - Key lookup is by exact hash match, so timing does not leak prefixes.
+- Keys have no expiry. Rotate on a schedule: `keys generate` a
+  replacement, deploy it to the caller, then `keys revoke` the old id.
+- Failed keys are logged with a sha256 fingerprint, so probing and abuse
+  are visible in the request logs without storing any plaintext.
 - Scopes are a coarse permission system for machines; interactive
   visitors should keep using sessions and `@perms`.

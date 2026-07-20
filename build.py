@@ -2083,7 +2083,13 @@ def run(dev: bool = False) -> bool:
         host = config.get("host-ip", "127.0.0.1")
         if not isinstance(host, str) or not host.strip():
             raise BuildError('"host-ip" must be a non-empty string.')
-        for name in ("cache-svelte", "docker", "session-https-only", "use-dotenv"):
+        for name in (
+            "cache-svelte",
+            "docker",
+            "session-https-only",
+            "trust-proxy",
+            "use-dotenv",
+        ):
             if name in config and not isinstance(config[name], bool):
                 raise BuildError(f'"{name}" must be true or false.')
         if "content-security-policy" in config and not isinstance(

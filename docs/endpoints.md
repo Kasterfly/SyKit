@@ -87,7 +87,7 @@ answering 401/403:
 
 - The server answers with the same `404 {"error": "Endpoint not found."}` an
   unknown endpoint returns, so probing cannot tell the two apart. (Unknown
-  API paths return that 404 for every HTTP method.)
+  API paths return that 404 for every HTTP method, standard or not.)
 - The compiled `$python` client does not embed the endpoint's URL, method, or
   parameter names. Hidden wrappers resolve their route at runtime through an
   opaque per-build token and the reserved `__sykit_manifest__` endpoint,

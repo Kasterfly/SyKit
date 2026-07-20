@@ -130,7 +130,7 @@ python tests/smoke_quickstart.py
 
 ## Status
 
-Beta (`0.12.1`)
+Beta (`0.12.2`)
 
 - Expect breaking changes before 1.0.
 - This is a side-project helper, not a production framework. For production

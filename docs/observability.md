@@ -46,6 +46,11 @@ If a store is unavailable, readiness returns 503, marks that check
 the response. The first readiness probe can create the normal sqlite database
 file and schema. Liveness never does.
 
+The readiness response names the stores in use, which reveals the app's
+backend topology to anyone who can reach it. On public deployments either
+leave `readiness-path` disabled or restrict the path to the orchestrator at
+the reverse proxy.
+
 ## Access logging
 
 Every HTTP response produces one `INFO` request record with these fields:

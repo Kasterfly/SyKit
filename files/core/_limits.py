@@ -59,9 +59,8 @@ class RateLimiter:
             shared.append(("site", "", site_limit))
         client_limit = limits.get("per-client")
         if client_limit is not None:
-            # The direct peer address is trustworthy because the server runs
-            # with proxy_headers=False. Behind a reverse proxy every client
-            # shares the proxy address, so this scope becomes a shared bucket.
+            # This is the direct peer unless trusted proxy handling is enabled;
+            # Uvicorn accepts forwarded addresses only from its allowed proxies.
             shared.append(("client", client, client_limit))
         key_limit = limits.get("per-key")
         if key_limit is not None and key_id:
