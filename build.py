@@ -38,6 +38,7 @@ FRONTEND_LOCK_PATH = FRONTEND_BUILD_DIR / "package-lock.json"
 DECORATOR_METHODS = {
     "expose": "POST",
     "raw": "GET",
+    "sse": "GET",
     "web_hook": "POST",
 }
 ENDPOINT_DECORATORS = frozenset(DECORATOR_METHODS) | {
@@ -48,7 +49,7 @@ ENDPOINT_DECORATORS = frozenset(DECORATOR_METHODS) | {
     "perms",
     "requires",
 }
-CLIENT_DECORATORS = {"expose", "raw"}
+CLIENT_DECORATORS = {"expose", "raw", "sse"}
 INJECTED_PARAMETERS = {"session", "request"}
 LIMIT_KEYS = {"per-client", "per-key", "per-session", "site-wide", "per-worker"}
 SCOPE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
@@ -744,6 +745,34 @@ def _parameter_info(
     return tuple(parameters)
 
 
+def _is_async_generator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    if not isinstance(node, ast.AsyncFunctionDef):
+        return False
+
+    class YieldFinder(ast.NodeVisitor):
+        found = False
+
+        def visit_Yield(self, _node: ast.Yield) -> None:
+            self.found = True
+
+        def visit_FunctionDef(self, _node: ast.FunctionDef) -> None:
+            return
+
+        def visit_AsyncFunctionDef(self, _node: ast.AsyncFunctionDef) -> None:
+            return
+
+        def visit_Lambda(self, _node: ast.Lambda) -> None:
+            return
+
+        def visit_ClassDef(self, _node: ast.ClassDef) -> None:
+            return
+
+    finder = YieldFinder()
+    for statement in node.body:
+        finder.visit(statement)
+    return finder.found
+
+
 def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointInfo]:
     try:
         source = path.read_text(encoding="utf-8")
@@ -854,6 +883,17 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
         if endpoint_kind is None or endpoint_path is None:
             continue
         parameters = _parameter_info(node, path)
+        if endpoint_kind == "sse":
+            if not _is_async_generator(node):
+                raise BuildError(
+                    f"{path}:{node.lineno}: @sse must decorate an async "
+                    "generator that yields events."
+                )
+            if any(item.name == "request" for item in parameters):
+                raise BuildError(
+                    f"{path}:{node.lineno}: @sse cannot inject request; use "
+                    "parameters and the read-only session instead."
+                )
         upload_parameters = [item for item in parameters if item.upload]
         if upload_parameters and endpoint_kind != "expose":
             raise BuildError(
@@ -1322,6 +1362,111 @@ def generate_client_module(
         "}",
         "",
     ]
+    has_sse = any(endpoint.kind == "sse" for endpoint in endpoints)
+    if has_sse:
+        lines.extend(
+            [
+                "class $sykitSSEParser {",
+                "  constructor() {",
+                '    this.buffer = "";',
+                "    this.data = [];",
+                '    this.event = "";',
+                "  }",
+                "",
+                "  push(text, final = false) {",
+                "    this.buffer += text;",
+                "    const messages = [];",
+                "    while (true) {",
+                "      let index = -1;",
+                "      for (let position = 0; position < this.buffer.length; position += 1) {",
+                "        const character = this.buffer[position];",
+                '        if (character === "\\r" || character === "\\n") { index = position; break; }',
+                "      }",
+                "      if (index < 0) break;",
+                '      if (!final && this.buffer[index] === "\\r" && index + 1 === this.buffer.length) break;',
+                "      const width = this.buffer[index] === "
+                '        "\\r" && this.buffer[index + 1] === "\\n" ? 2 : 1;',
+                "      const line = this.buffer.slice(0, index);",
+                "      this.buffer = this.buffer.slice(index + width);",
+                "      const message = this.line(line);",
+                "      if (message) messages.push(message);",
+                "    }",
+                "    if (final && this.buffer) {",
+                "      this.line(this.buffer);",
+                '      this.buffer = "";',
+                "    }",
+                "    return messages;",
+                "  }",
+                "",
+                "  line(line) {",
+                '    if (line === "") {',
+                "      if (!this.data.length) {",
+                '        this.event = "";',
+                "        return null;",
+                "      }",
+                '      const message = { event: this.event, data: this.data.join("\\n") };',
+                "      this.data = [];",
+                '      this.event = "";',
+                "      return message;",
+                "    }",
+                '    if (line.startsWith(":")) return null;',
+                '    const separator = line.indexOf(":");',
+                "    const field = separator < 0 ? line : line.slice(0, separator);",
+                '    let value = separator < 0 ? "" : line.slice(separator + 1);',
+                '    if (value.startsWith(" ")) value = value.slice(1);',
+                '    if (field === "data") this.data.push(value);',
+                '    if (field === "event") this.event = value;',
+                "    return null;",
+                "  }",
+                "}",
+                "",
+                "function $sykitSSEValue(message) {",
+                "  let data;",
+                "  try { data = $sykitGlobal.JSON.parse(message.data); } catch {",
+                '    throw new SyKitError("The stream sent invalid JSON.", 500, { data: message.data });',
+                "  }",
+                '  if (message.event === "sykit-error") {',
+                '    const detail = data?.error || "The stream failed.";',
+                "    throw new SyKitError(detail, 500, data);",
+                "  }",
+                "  return data;",
+                "}",
+                "",
+                "async function* $sykitSSE(endpoint, values) {",
+                "  const query = new $sykitGlobal.URLSearchParams();",
+                "  for (const [name, value] of $sykitGlobal.Object.entries(values)) query.set(name, $sykitGlobal.JSON.stringify(value));",
+                '  const suffix = query.size ? `?${query}` : "";',
+                '  const response = await $sykitGlobal.fetch(`${$sykitEndpointUrl(endpoint)}${suffix}`, { credentials: "include" });',
+                "  if (!response.ok) { await $sykitDecodeResponse(response); return; }",
+                '  const contentType = response.headers?.get?.("content-type") || "";',
+                '  if (contentType.split(";", 1)[0].trim().toLowerCase() !== "text/event-stream") {',
+                '    throw new SyKitError("Expected a SyKit event stream.", response.status, { contentType });',
+                "  }",
+                '  if (!response.body || typeof response.body.getReader !== "function") {',
+                '    throw new SyKitError("Streaming responses are not supported by this client.", 0, null);',
+                "  }",
+                "  const reader = response.body.getReader();",
+                '  const decoder = new $sykitGlobal.TextDecoder("utf-8");',
+                "  const parser = new $sykitSSEParser();",
+                "  let finished = false;",
+                "  try {",
+                "    while (true) {",
+                "      const chunk = await reader.read();",
+                "      const messages = parser.push(decoder.decode(chunk.value, { stream: !chunk.done }), chunk.done);",
+                "      for (const message of messages) yield $sykitSSEValue(message);",
+                "      if (chunk.done) { finished = true; return; }",
+                "    }",
+                "  } catch (error) {",
+                "    if (error instanceof SyKitError) throw error;",
+                '    throw new SyKitError("The stream disconnected.", 0, null);',
+                "  } finally {",
+                "    if (!finished) { try { await reader.cancel(); } catch {} }",
+                "    reader.releaseLock?.();",
+                "  }",
+                "}",
+                "",
+            ]
+        )
     has_hidden = any(
         endpoint.hidden and endpoint.kind in CLIENT_DECORATORS for endpoint in endpoints
     )
@@ -1342,23 +1487,42 @@ def generate_client_module(
                 "  return {};",
                 "}",
                 "",
-                "async function $sykitHiddenCall(token, values) {",
+                "async function $sykitHiddenRecord(token) {",
                 "  let map = $sykitHiddenPromise ? await $sykitHiddenPromise : null;",
                 "  if (!map || !map[token]) {",
                 "    $sykitHiddenPromise = $sykitHiddenManifest();",
                 "    map = await $sykitHiddenPromise;",
                 "  }",
-                "  const record = map[token];",
-                "  if (!record) return hidden_api();",
+                "  return map[token] || null;",
+                "}",
+                "",
+                "function $sykitHiddenValues(record, values) {",
                 "  const named = {};",
                 "  (record.p || []).forEach((name, index) => { named[name] = values[index]; });",
-                "  const compact = $sykitCompact(named);",
+                "  return $sykitCompact(named);",
+                "}",
+                "",
+                "async function $sykitHiddenCall(token, values) {",
+                "  const record = await $sykitHiddenRecord(token);",
+                "  if (!record) return hidden_api();",
+                "  const compact = $sykitHiddenValues(record, values);",
                 '  if (record.m === "GET") return $sykitGet(record.e, compact);',
                 "  return record.u?.length ? $sykitPostMultipart(record.e, compact, record.u) : $sykitPost(record.e, compact);",
                 "}",
                 "",
             ]
         )
+        if any(endpoint.hidden and endpoint.kind == "sse" for endpoint in endpoints):
+            lines.extend(
+                [
+                    "async function* $sykitHiddenSSE(token, values) {",
+                    "  const record = await $sykitHiddenRecord(token);",
+                    "  if (!record || !record.s) return hidden_api();",
+                    "  yield* $sykitSSE(record.e, $sykitHiddenValues(record, values));",
+                    "}",
+                    "",
+                ]
+            )
     for endpoint in endpoints:
         if endpoint.kind not in CLIENT_DECORATORS:
             continue
@@ -1370,6 +1534,16 @@ def generate_client_module(
                     f"Hidden endpoint {endpoint.function!r} has no client token."
                 )
             arguments = "[" + ", ".join(p.name for p in parameters) + "]"
+            if endpoint.kind == "sse":
+                lines.extend(
+                    [
+                        f"export function {endpoint.function}({signature}) {{",
+                        f"  return $sykitHiddenSSE({_json_dump(endpoint.token)}, {arguments});",
+                        "}",
+                        "",
+                    ]
+                )
+                continue
             lines.extend(
                 [
                     f"export async function {endpoint.function}({signature}) {{",
@@ -1380,6 +1554,16 @@ def generate_client_module(
             )
             continue
         values = _js_object_expression(parameters)
+        if endpoint.kind == "sse":
+            lines.extend(
+                [
+                    f"export function {endpoint.function}({signature}) {{",
+                    f"  return $sykitSSE({_json_dump(endpoint.endpoint)}, {values});",
+                    "}",
+                    "",
+                ]
+            )
+            continue
         uploads = [parameter.name for parameter in parameters if parameter.upload]
         if uploads:
             call = (
@@ -1871,12 +2055,14 @@ def run(dev: bool = False) -> bool:
         port = config.get("host-port", 8000)
         workers = config.get("workers", 1)
         task_concurrency = config.get("task-concurrency", 1)
+        sse_heartbeat_seconds = config.get("sse-heartbeat-seconds", 15)
         max_request_bytes = config.get("max-request-bytes", 1_048_576)
         session_max_age = config.get("session-max-age", 1209600)
         for name, value in (
             ("host-port", port),
             ("workers", workers),
             ("task-concurrency", task_concurrency),
+            ("sse-heartbeat-seconds", sse_heartbeat_seconds),
             ("max-request-bytes", max_request_bytes),
             ("session-max-age", session_max_age),
         ):
@@ -1886,6 +2072,8 @@ def run(dev: bool = False) -> bool:
             raise BuildError('"workers" must be at least 1.')
         if task_concurrency < 1:
             raise BuildError('"task-concurrency" must be at least 1.')
+        if sse_heartbeat_seconds < 1:
+            raise BuildError('"sse-heartbeat-seconds" must be at least 1.')
         if not 1 <= port <= 65535:
             raise BuildError('"host-port" must be between 1 and 65535.')
         if max_request_bytes < 1:

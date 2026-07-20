@@ -96,8 +96,10 @@ Commands operate on the current working directory (your project root).
 
 ## Docs
 
-- [Endpoints](docs/endpoints.md): `@expose`, `@raw`, `@web_hook`, sessions,
+- [Endpoints](docs/endpoints.md): `@expose`, `@raw`, `@sse`, `@web_hook`, sessions,
   permissions, CORS, rate limits
+- [Streaming](docs/streaming.md): SSE async iterators, lifecycle, errors,
+  guards, session rules, and deployment notes
 - [Uploads](docs/uploads.md): multipart `File`/`Blob` calls, disk-backed
   temporary files, size limits, validation, and media storage guidance
 - [Background Tasks](docs/background-tasks.md): persistent task calls, UTC
@@ -128,7 +130,7 @@ python tests/smoke_quickstart.py
 
 ## Status
 
-Beta (`0.11.0`)
+Beta (`0.12.0`)
 
 - Expect breaking changes before 1.0.
 - This is a side-project helper, not a production framework. For production

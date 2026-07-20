@@ -14,11 +14,12 @@ from .utils import (
     perms,
     raw,
     requires,
+    sse,
     update_session,
     web_hook,
 )
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.
@@ -39,6 +40,7 @@ __all__ = [
     "register_error_hook",
     "requires",
     "scheduled",
+    "sse",
     "task",
     "update_session",
     "util",

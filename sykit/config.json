@@ -2,6 +2,7 @@
     "frontend-packages": {},
     "workers": 1,
     "task-concurrency": 1,
+    "sse-heartbeat-seconds": 15,
     "endpoints": "/api/",
     "host-ip": "127.0.0.1",
     "host-port": 8000,

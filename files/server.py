@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import ipaddress
@@ -9,7 +10,8 @@ import os
 import re
 import sys
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit
@@ -22,7 +24,7 @@ from starlette.exceptions import HTTPException
 from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 ROOT = Path(__file__).resolve().parent
@@ -70,6 +72,64 @@ class EndpointUploadTooLarge(RuntimeError):
         )
         super().__init__(message)
         self.maximum_bytes = maximum_bytes
+
+
+def _blocked_session_mutation(*_args, **_kwargs):
+    raise RuntimeError("Sessions are read-only inside @sse streams.")
+
+
+class ReadOnlySession(dict[str, Any]):
+    __delitem__ = _blocked_session_mutation
+    __ior__ = _blocked_session_mutation
+    __setitem__ = _blocked_session_mutation
+    clear = _blocked_session_mutation
+    pop = _blocked_session_mutation
+    popitem = _blocked_session_mutation
+    setdefault = _blocked_session_mutation
+    update = _blocked_session_mutation
+
+
+class ReadOnlySessionList(list[Any]):
+    __delitem__ = _blocked_session_mutation
+    __iadd__ = _blocked_session_mutation
+    __imul__ = _blocked_session_mutation
+    __setitem__ = _blocked_session_mutation
+    append = _blocked_session_mutation
+    clear = _blocked_session_mutation
+    extend = _blocked_session_mutation
+    insert = _blocked_session_mutation
+    pop = _blocked_session_mutation
+    remove = _blocked_session_mutation
+    reverse = _blocked_session_mutation
+    sort = _blocked_session_mutation
+
+
+def _read_only_session(value: dict[str, Any]) -> ReadOnlySession:
+    def freeze(item: Any) -> Any:
+        if isinstance(item, dict):
+            result = ReadOnlySession()
+            for key, child in item.items():
+                dict.__setitem__(result, key, freeze(child))
+            return result
+        if isinstance(item, list):
+            result = ReadOnlySessionList()
+            list.extend(result, (freeze(child) for child in item))
+            return result
+        if isinstance(item, tuple):
+            return tuple(freeze(child) for child in item)
+        return deepcopy(item)
+
+    return freeze(value)
+
+
+class SSEStreamingResponse(StreamingResponse):
+    async def stream_response(self, send) -> None:
+        try:
+            await super().stream_response(send)
+        finally:
+            close = getattr(self.body_iterator, "aclose", None)
+            if close is not None:
+                await close()
 
 
 class DiskMultiPartParser(MultiPartParser):
@@ -165,6 +225,7 @@ def _positive_integer_setting(name: str, default: int) -> int:
 
 
 MAX_REQUEST_BYTES = _positive_integer_setting("max-request-bytes", 1_048_576)
+SSE_HEARTBEAT_SECONDS = _positive_integer_setting("sse-heartbeat-seconds", 15)
 
 
 def _api_prefix() -> str:
@@ -422,7 +483,7 @@ async def _provided_values(
     metadata: dict[str, Any],
 ) -> AsyncIterator[dict[str, Any]]:
     kind = metadata["kind"]
-    if kind == "raw":
+    if kind in {"raw", "sse"}:
         yield _query_values(request)
         return
     normal_parameters = [
@@ -495,6 +556,7 @@ def _call_values(
     request: Request,
     metadata: dict[str, Any],
     provided: dict[str, Any],
+    session: dict[str, Any],
 ) -> dict[str, Any]:
     accepted = {
         parameter["name"]
@@ -510,10 +572,83 @@ def _call_values(
     values = dict(provided)
     for parameter in metadata["parameters"]:
         if parameter["name"] == "session":
-            values["session"] = request.session
+            values["session"] = session
         elif parameter["name"] == "request":
             values["request"] = request
     return values
+
+
+def _sse_frame(value: Any, *, event: str = "") -> bytes:
+    data = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    prefix = f"event: {event}\n" if event else ""
+    return f"{prefix}data: {data}\n\n".encode("utf-8")
+
+
+async def _sse_events(
+    iterator,
+    request: Request,
+    metadata: dict[str, Any],
+    session: ReadOnlySession,
+    manager,
+) -> AsyncIterator[bytes]:
+    task_token = (
+        task_api._bind_enqueuer(manager.enqueue) if manager is not None else None
+    )
+    session_token = session_util._bind_session(session)
+    pending: asyncio.Task | None = None
+    try:
+        while True:
+            pending = asyncio.create_task(anext(iterator))
+            while not pending.done():
+                done, _pending = await asyncio.wait(
+                    {pending},
+                    timeout=SSE_HEARTBEAT_SECONDS,
+                )
+                if pending not in done:
+                    yield b": keepalive\n\n"
+            try:
+                value = pending.result()
+            except StopAsyncIteration:
+                break
+            finally:
+                pending = None
+            yield _sse_frame(value)
+    except asyncio.CancelledError:
+        raise
+    except Exception as error:
+        LOGGER.exception(
+            "Unhandled exception in stream %s.%s",
+            metadata.get("module"),
+            metadata.get("name"),
+        )
+        try:
+            await error_hooks._notify_error(error, request)
+        except Exception:
+            LOGGER.exception("The registered error hook failed.")
+        yield _sse_frame({"error": "The stream failed."}, event="sykit-error")
+    finally:
+        if pending is not None:
+            pending.cancel()
+            with suppress(asyncio.CancelledError, StopAsyncIteration):
+                await pending
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            try:
+                await close()
+            except Exception:
+                LOGGER.exception(
+                    "Failed to close stream %s.%s",
+                    metadata.get("module"),
+                    metadata.get("name"),
+                )
+        session_util._reset_session(session_token)
+        if task_token is not None:
+            task_api._reset_enqueuer(task_token)
 
 
 async def _check_api_key(
@@ -546,6 +681,10 @@ async def _check_api_key(
 
 async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
     metadata = record["metadata"]
+    if metadata["kind"] == "sse" and request.method == "HEAD":
+        if metadata.get("hidden"):
+            return _not_found()
+        return _error(405, "SSE endpoints require GET.", {"Allow": "GET"})
     permission_error = _check_permissions(request, metadata)
     if permission_error is not None:
         return permission_error
@@ -572,7 +711,12 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
         return _error(503, "Rate limiting is temporarily unavailable.")
     try:
         async with _provided_values(request, metadata) as provided:
-            values = _call_values(request, metadata, provided)
+            runtime_session = (
+                _read_only_session(request.session)
+                if metadata["kind"] == "sse"
+                else request.session
+            )
+            values = _call_values(request, metadata, provided, runtime_session)
             function = record["function"]
             try:
                 bound = record["signature"].bind(**values)
@@ -581,6 +725,24 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
             bound.apply_defaults()
 
             manager = getattr(request.app.state, "task_manager", None)
+            if metadata["kind"] == "sse":
+                iterator = function(*bound.args, **bound.kwargs)
+                if not inspect.isasyncgen(iterator):
+                    raise TypeError("@sse endpoints must return an async generator.")
+                return SSEStreamingResponse(
+                    _sse_events(
+                        iterator,
+                        request,
+                        metadata,
+                        runtime_session,
+                        manager,
+                    ),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
             task_token = (
                 task_api._bind_enqueuer(manager.enqueue)
                 if manager is not None
@@ -664,6 +826,8 @@ async def _hidden_manifest(request: Request) -> Response:
         ]
         if upload_names:
             entry["u"] = upload_names
+        if metadata["kind"] == "sse":
+            entry["s"] = True
         visible[token] = entry
     return JSONResponse(visible)
 

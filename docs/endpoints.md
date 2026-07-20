@@ -9,6 +9,7 @@ them, and generates the `$python` client module for the frontend.
 | --- | --- | --- | --- |
 | `@expose(name)` | POST | JSON or multipart body | Yes |
 | `@raw(name)` | GET | Query string | Yes |
+| `@sse(name)` | GET | Query string | Yes, as an async iterator |
 | `@web_hook(name)` | POST | JSON body | No - for external callers |
 
 ```python
@@ -35,6 +36,9 @@ function (minus the injected ones below). Failed calls throw `SyKitError`
 - `session` and `request` are injected by name: `session` is a per-visitor
   dict persisted in a signed cookie, `request` is the raw Starlette request.
   The client never sends them.
+- `@sse` supports `session`, but not `request` or `Upload`. Its session is a
+  recursively read-only snapshot because response headers and cookies are
+  committed before streamed code runs. See [Streaming](streaming.md).
 - Every other parameter comes from the caller. Defaults work; unknown or
   missing arguments are rejected with an error response.
 - A parameter annotated as `Upload` switches that `@expose` endpoint to a
@@ -47,6 +51,8 @@ function (minus the injected ones below). Failed calls throw `SyKitError`
 - JSON-serializable data is sent as a JSON response.
 - A Starlette `Response` is sent as-is.
 - Both `def` and `async def` work, sync functions run in a thread pool.
+- `@sse` is the exception: it must be an async generator, and each yielded
+  JSON-serializable value becomes the next client iterator value.
 
 ## Guards
 

@@ -10,6 +10,7 @@ defaults below apply when a key is missing.
 | `allowed-hosts` | `127.0.0.1`, `localhost`, `::1` | Host header allowlist |
 | `workers` | `1` | Server worker processes |
 | `task-concurrency` | `1` | Background calls that may run concurrently in each server process ([details](background-tasks.md#enqueue-work)) |
+| `sse-heartbeat-seconds` | `15` | Seconds between SSE keepalive comments while an event is pending; positive integer ([details](streaming.md#lifecycle-and-errors)) |
 | `max-request-bytes` | `1048576` | Global request body cap, including multipart overhead ([upload limits](uploads.md#size-limits)) |
 | `frontend-packages` | `{}` (locked SyKit defaults) | Optional overrides for the pinned Svelte 5, Vite, and Svelte plugin versions |
 | `cache-svelte` | `true` | Keep the npm cache (`__sykitcache__/`) between builds; `false` removes it after each build |

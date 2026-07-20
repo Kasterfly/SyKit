@@ -89,6 +89,10 @@ def raw(endpoint: str):
     return _route("raw", endpoint)
 
 
+def sse(endpoint: str):
+    return _route("sse", endpoint)
+
+
 def web_hook(endpoint: str):
     return _route("web_hook", endpoint)
 
@@ -164,6 +168,7 @@ __all__ = [
     "perms",
     "raw",
     "requires",
+    "sse",
     "update_session",
     "web_hook",
 ]
