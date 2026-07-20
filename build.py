@@ -40,6 +40,14 @@ DECORATOR_METHODS = {
     "raw": "GET",
     "web_hook": "POST",
 }
+ENDPOINT_DECORATORS = frozenset(DECORATOR_METHODS) | {
+    "api_key",
+    "cors",
+    "hidden",
+    "limits",
+    "perms",
+    "requires",
+}
 CLIENT_DECORATORS = {"expose", "raw"}
 INJECTED_PARAMETERS = {"session", "request"}
 LIMIT_KEYS = {"per-client", "per-key", "per-session", "site-wide", "per-worker"}
@@ -230,6 +238,19 @@ class EndpointInfo:
         return tuple(
             parameter for parameter in self.parameters if not parameter.injected
         )
+
+
+@dataclass(frozen=True)
+class TaskInfo:
+    function: str
+    module: str
+    file: str
+    is_async: bool
+    schedule: dict[str, Any] | None = None
+
+    @property
+    def task_id(self) -> str:
+        return f"{self.module}:{self.function}"
 
 
 def _reject_json_constant(value: str) -> None:
@@ -607,17 +628,21 @@ def assign_hidden_tokens(endpoints: list[EndpointInfo]) -> list[EndpointInfo]:
     ]
 
 
-def _module_name(path: Path, source_root: Path) -> str:
+def _module_name(
+    path: Path,
+    source_root: Path,
+    declaration: str = "endpoint",
+) -> str:
     relative = path.relative_to(source_root).with_suffix("")
     parts = list(relative.parts)
     if parts[-1] == "__init__":
         parts.pop()
     if not parts:
-        raise BuildError(f"{path}: root __init__.py cannot declare an endpoint.")
+        raise BuildError(f"{path}: root __init__.py cannot declare a {declaration}.")
     invalid = [part for part in parts if not part.isidentifier()]
     if invalid:
         raise BuildError(
-            f"{path}: endpoint modules must use valid Python identifiers; "
+            f"{path}: {declaration} modules must use valid Python identifiers; "
             f"invalid component {invalid[0]!r}."
         )
     return ".".join(parts)
@@ -895,6 +920,192 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
     return results
 
 
+def _cron_field(
+    value: str,
+    minimum: int,
+    maximum: int,
+    name: str,
+    location: str,
+) -> tuple[tuple[int, ...], bool]:
+    values: set[int] = set()
+    if not value or value.startswith(",") or value.endswith(","):
+        raise BuildError(f"{location}: invalid {name} field in @scheduled.")
+    for component in value.split(","):
+        if not component or component.count("/") > 1:
+            raise BuildError(f"{location}: invalid {name} field in @scheduled.")
+        base, separator, step_text = component.partition("/")
+        if separator:
+            if not step_text.isdigit() or int(step_text) < 1:
+                raise BuildError(
+                    f"{location}: {name} steps in @scheduled must be positive integers."
+                )
+            step = int(step_text)
+        else:
+            step = 1
+
+        if base == "*":
+            start, end = minimum, maximum
+        elif base.count("-") == 1:
+            start_text, end_text = base.split("-", 1)
+            if not start_text.isdigit() or not end_text.isdigit():
+                raise BuildError(f"{location}: invalid {name} range in @scheduled.")
+            start, end = int(start_text), int(end_text)
+        elif base.isdigit():
+            start = int(base)
+            end = maximum if separator else start
+        else:
+            raise BuildError(f"{location}: invalid {name} field in @scheduled.")
+
+        if start < minimum or end > maximum or start > end:
+            raise BuildError(
+                f"{location}: {name} values in @scheduled must be between "
+                f"{minimum} and {maximum}."
+            )
+        values.update(range(start, end + 1, step))
+
+    if name == "day-of-week":
+        values = {0 if item == 7 else item for item in values}
+        complete = set(range(0, 7))
+    else:
+        complete = set(range(minimum, maximum + 1))
+    return tuple(sorted(values)), values == complete
+
+
+def parse_cron(expression: Any, path: Path, line: int) -> dict[str, Any]:
+    location = f"{path}:{line}"
+    if not isinstance(expression, str) or not expression.strip():
+        raise BuildError(f"{location}: @scheduled requires a cron string.")
+    parts = expression.split()
+    if len(parts) != 5:
+        raise BuildError(
+            f"{location}: @scheduled requires five cron fields: minute, hour, "
+            "day-of-month, month, and day-of-week."
+        )
+    definitions = (
+        ("minute", 0, 59),
+        ("hour", 0, 23),
+        ("day-of-month", 1, 31),
+        ("month", 1, 12),
+        ("day-of-week", 0, 7),
+    )
+    parsed = [
+        _cron_field(value, minimum, maximum, name, location)
+        for value, (name, minimum, maximum) in zip(parts, definitions)
+    ]
+    return {
+        "minute": parsed[0][0],
+        "hour": parsed[1][0],
+        "day": parsed[2][0],
+        "month": parsed[3][0],
+        "weekday": parsed[4][0],
+        "day_any": parsed[2][1],
+        "weekday_any": parsed[4][1],
+    }
+
+
+def parse_tasks(path: Path, source_root: Path = SRC_DIR) -> list[TaskInfo]:
+    try:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+    except OSError as error:
+        raise BuildError(f"Could not read {path}: {error}") from error
+    except SyntaxError as error:
+        raise BuildError(
+            f"Syntax error in {path}:{error.lineno}: {error.msg}"
+        ) from error
+
+    results: list[TaskInfo] = []
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        declaration: str | None = None
+        schedule: dict[str, Any] | None = None
+        has_endpoint_decorator = False
+        for decorator in node.decorator_list:
+            call_name = _get_call_name(decorator)
+            if isinstance(decorator, (ast.Name, ast.Attribute)):
+                bare_name = (
+                    decorator.id if isinstance(decorator, ast.Name) else decorator.attr
+                )
+                if bare_name == "scheduled":
+                    raise BuildError(
+                        f"{path}:{node.lineno}: @scheduled must be called with a "
+                        "cron expression."
+                    )
+                if bare_name == "task":
+                    if declaration is not None:
+                        raise BuildError(
+                            f"{path}:{node.lineno}: only one background task "
+                            "decorator is allowed."
+                        )
+                    declaration = "task"
+                if bare_name in ENDPOINT_DECORATORS:
+                    has_endpoint_decorator = True
+            if call_name in ENDPOINT_DECORATORS:
+                has_endpoint_decorator = True
+            if call_name == "task":
+                raise BuildError(
+                    f"{path}:{node.lineno}: @task must be used without arguments."
+                )
+            if call_name == "scheduled":
+                if declaration is not None:
+                    raise BuildError(
+                        f"{path}:{node.lineno}: only one background task decorator "
+                        "is allowed."
+                    )
+                declaration = "scheduled"
+                decorator = cast(ast.Call, decorator)
+                expression = _literal_argument(decorator, "scheduled", path)
+                schedule = parse_cron(expression, path, node.lineno)
+
+        if declaration is None:
+            continue
+        if has_endpoint_decorator:
+            raise BuildError(
+                f"{path}:{node.lineno}: background tasks cannot use endpoint "
+                "decorators."
+            )
+        arguments = node.args
+        if declaration == "scheduled" and (
+            arguments.posonlyargs
+            or arguments.args
+            or arguments.vararg
+            or arguments.kwonlyargs
+            or arguments.kwarg
+        ):
+            raise BuildError(
+                f"{path}:{node.lineno}: scheduled tasks cannot declare parameters."
+            )
+        results.append(
+            TaskInfo(
+                function=node.name,
+                module=_module_name(path, source_root, "background task"),
+                file=path.relative_to(source_root).as_posix(),
+                is_async=isinstance(node, ast.AsyncFunctionDef),
+                schedule=schedule,
+            )
+        )
+    return results
+
+
+def detect_tasks(
+    python_files: list[Path], source_root: Path = SRC_DIR
+) -> list[TaskInfo]:
+    tasks: list[TaskInfo] = []
+    names: dict[str, TaskInfo] = {}
+    for path in python_files:
+        for task_info in parse_tasks(path, source_root):
+            previous = names.get(task_info.task_id)
+            if previous is not None:
+                raise BuildError(
+                    f"Duplicate background task {task_info.task_id!r} in "
+                    f"{previous.file} and {task_info.file}."
+                )
+            names[task_info.task_id] = task_info
+            tasks.append(task_info)
+    return sorted(tasks, key=lambda item: item.task_id)
+
+
 def detect_endpoints(
     python_files: list[Path], source_root: Path = SRC_DIR
 ) -> list[EndpointInfo]:
@@ -977,6 +1188,41 @@ def generate_backend_manifest(endpoints: list[EndpointInfo]) -> str:
             "",
         ]
     )
+    return "\n".join(lines)
+
+
+def generate_task_manifest(tasks: list[TaskInfo]) -> str:
+    lines = [
+        '"""Generated by SyKit. Do not edit."""',
+        "",
+        "from importlib import import_module",
+        "",
+        "",
+        "def _load(module_name, function_name):",
+        "    module = import_module(module_name)",
+        "    return getattr(module, function_name)",
+        "",
+        "",
+        "TASKS = [",
+    ]
+    for task_info in tasks:
+        metadata = {
+            "id": task_info.task_id,
+            "name": task_info.function,
+            "module": task_info.module,
+            "file": task_info.file,
+            "is_async": task_info.is_async,
+            "schedule": task_info.schedule,
+        }
+        lines.extend(
+            [
+                "    {",
+                f'        "metadata": {metadata!r},',
+                f'        "function": _load({_json_dump(task_info.module)}, {_json_dump(task_info.function)}),',
+                "    },",
+            ]
+        )
+    lines.extend(["]", ""])
     return "\n".join(lines)
 
 
@@ -1381,6 +1627,7 @@ __pycache__/
 *.pyc
 .sykit-limits.sqlite3
 .sykit-sessions.sqlite3
+.sykit-tasks.sqlite3
 """
 
 
@@ -1417,6 +1664,7 @@ def generate_compose(port: int, health_path: str = "/healthz") -> str:
         "      timeout: 5s\n"
         "      retries: 3\n"
         "      start_period: 5s\n"
+        "    stop_grace_period: 1m\n"
         "    restart: unless-stopped\n"
     )
 
@@ -1535,6 +1783,7 @@ def _run_dev_server(use_dotenv: bool) -> bool:
 def prepare_staging(
     config_path: Path,
     backend_manifest: str,
+    task_manifest: str,
     client_module: str,
     use_dotenv: bool,
 ) -> None:
@@ -1561,6 +1810,7 @@ def prepare_staging(
     (STAGING_DIR / "core" / "_endpoints.py").write_text(
         backend_manifest, encoding="utf-8"
     )
+    (STAGING_DIR / "core" / "_tasks.py").write_text(task_manifest, encoding="utf-8")
     (STAGING_DIR / "core" / "endpoints.mjs").write_text(client_module, encoding="utf-8")
     _copy_python_sources(STAGING_DIR / "app", config_path.parent)
 
@@ -1620,11 +1870,13 @@ def run(dev: bool = False) -> bool:
             )
         port = config.get("host-port", 8000)
         workers = config.get("workers", 1)
+        task_concurrency = config.get("task-concurrency", 1)
         max_request_bytes = config.get("max-request-bytes", 1_048_576)
         session_max_age = config.get("session-max-age", 1209600)
         for name, value in (
             ("host-port", port),
             ("workers", workers),
+            ("task-concurrency", task_concurrency),
             ("max-request-bytes", max_request_bytes),
             ("session-max-age", session_max_age),
         ):
@@ -1632,6 +1884,8 @@ def run(dev: bool = False) -> bool:
                 raise BuildError(f'"{name}" must be an integer.')
         if workers < 1:
             raise BuildError('"workers" must be at least 1.')
+        if task_concurrency < 1:
+            raise BuildError('"task-concurrency" must be at least 1.')
         if not 1 <= port <= 65535:
             raise BuildError('"host-port" must be between 1 and 65535.')
         if max_request_bytes < 1:
@@ -1648,6 +1902,8 @@ def run(dev: bool = False) -> bool:
             config["content-security-policy"], str
         ):
             raise BuildError('"content-security-policy" must be a string.')
+        if "task-store" in config and not isinstance(config["task-store"], str):
+            raise BuildError('"task-store" must be a string.')
         for name, default, choices in (
             ("log-format", "text", {"text", "json"}),
             (
@@ -1675,14 +1931,22 @@ def run(dev: bool = False) -> bool:
         python_files = list_python_files(SRC_DIR, sykit_dir)
         validate_module_roots(python_files)
         endpoints = detect_endpoints(python_files)
+        tasks = detect_tasks(python_files)
         endpoints = apply_endpoint_defaults(config, endpoints, config_path)
         validate_hidden_endpoints(endpoints)
         endpoints = assign_hidden_tokens(endpoints)
         backend_manifest = generate_backend_manifest(endpoints)
+        task_manifest = generate_task_manifest(tasks)
         client_module = generate_client_module(config, endpoints)
 
         prepare_frontend_cache(config, sykit_dir, client_module)
-        prepare_staging(config_path, backend_manifest, client_module, use_dotenv)
+        prepare_staging(
+            config_path,
+            backend_manifest,
+            task_manifest,
+            client_module,
+            use_dotenv,
+        )
         if bool(config.get("docker", False)):
             write_docker_files(port, host, health_path)
         compile_frontend()

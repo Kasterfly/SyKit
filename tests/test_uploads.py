@@ -217,7 +217,15 @@ class UploadServerTests(unittest.TestCase):
             (runtime / "app").mkdir()
             (runtime / "static").mkdir()
             shutil.copy2(ROOT / "files" / "server.py", runtime / "server.py")
-            for name in ("__init__.py", "_limits.py", "_sessions.py", "_apikeys.py"):
+            for name in (
+                "__init__.py",
+                "_limits.py",
+                "_sessions.py",
+                "_apikeys.py",
+                "_task_runtime.py",
+                "_task_store.py",
+                "_tasks.py",
+            ):
                 shutil.copy2(ROOT / "files" / "core" / name, runtime / "core" / name)
             shutil.copytree(ROOT / "sykit", runtime / "app" / "sykit")
             (runtime / "config.json").write_text(

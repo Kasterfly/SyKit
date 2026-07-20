@@ -256,7 +256,15 @@ def _build_runtime(directory: Path, config: dict) -> None:
     (directory / "app").mkdir()
     (directory / "static" / "admin").mkdir(parents=True)
     shutil.copy2(ROOT / "files" / "server.py", directory / "server.py")
-    for name in ("__init__.py", "_apikeys.py", "_limits.py", "_sessions.py"):
+    for name in (
+        "__init__.py",
+        "_apikeys.py",
+        "_limits.py",
+        "_sessions.py",
+        "_task_runtime.py",
+        "_task_store.py",
+        "_tasks.py",
+    ):
         shutil.copy2(ROOT / "files" / "core" / name, directory / "core" / name)
     shutil.copytree(
         ROOT / "sykit",

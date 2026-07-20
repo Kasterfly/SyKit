@@ -1,6 +1,7 @@
 {
     "frontend-packages": {},
     "workers": 1,
+    "task-concurrency": 1,
     "endpoints": "/api/",
     "host-ip": "127.0.0.1",
     "host-port": 8000,
@@ -16,6 +17,7 @@
     "session-max-age": 1209600,
     "session-store": "",
     "apikey-store": "",
+    "task-store": "",
     "content-security-policy": "",
     "use-dotenv": false,
     "sykit-folder-path": "",

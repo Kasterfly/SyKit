@@ -48,6 +48,7 @@ class DockerFileGenerationTests(unittest.TestCase):
         self.assertIn("SYKIT_SESSION_SECRET", content)
         self.assertIn("${SYKIT_SESSION_SECRET:?", content)
         self.assertIn("restart: unless-stopped", content)
+        self.assertIn("stop_grace_period: 1m", content)
         self.assertIn("healthcheck:", content)
         self.assertIn("http://127.0.0.1:8443/healthz", content)
 
@@ -62,6 +63,7 @@ class DockerFileGenerationTests(unittest.TestCase):
             "*.pyc",
             ".sykit-limits.sqlite3",
             ".sykit-sessions.sqlite3",
+            ".sykit-tasks.sqlite3",
         ):
             self.assertIn(entry, build.DOCKERIGNORE)
 

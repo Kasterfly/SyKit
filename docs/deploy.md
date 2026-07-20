@@ -14,7 +14,7 @@ then also writes three files into `built/`:
 - `compose.yaml`: builds the image, publishes the port, passes
   `SYKIT_SESSION_SECRET` through from the host environment (Compose
   refuses to start without it), probes the configured `health-path`,
-  and restarts unless stopped.
+  allows one minute for graceful shutdown, and restarts unless stopped.
 - `.dockerignore`: keeps `__pycache__` and the local sqlite state files
   out of the image.
 
@@ -47,7 +47,20 @@ the app folder disappears with it:
 - API keys: point `apikey-store` at a mounted volume
   (`"sqlite:/data/keys.db"` plus a volume for `/data`), or ship the key
   file deliberately.
+- Background calls: point `task-store` at a mounted volume
+  (`"sqlite:/data/tasks.db"`) for one replica, or use a shared database
+  store for multiple replicas. The default queue is disposable in a
+  container.
 - Rate limits are per-container by design; that is usually fine.
+
+## Graceful shutdown
+
+On SIGTERM, task runners stop claiming new calls and wait for in-flight calls
+to finish. Generated Compose files set `stop_grace_period: 1m` instead of the
+short container default. Increase the platform's termination grace above the
+longest legitimate task. If a hard kill still interrupts a call, its queue
+lease expires so another worker can recover it. See
+[Background Tasks](background-tasks.md#delivery-and-failures).
 
 ## Uploaded media
 
@@ -85,6 +98,10 @@ Notes for more than one replica (Swarm or otherwise):
 - `site-wide` and `per-key` rate limits are per-container: each replica
   keeps its own sqlite bucket file. Front the service with a proxy
   limiter if you need one global budget.
+- Every replica must use the same `task-store` for one shared queue and
+  single-runner scheduled jobs. Independent sqlite files create independent
+  queues. A shared store still provides at-least-once delivery, so task
+  effects must be idempotent.
 - Behind the ingress or any reverse proxy, the app sees the proxy's
   address; see the reverse-proxy section in
   [Configuration](configuration.md) before trusting forwarded headers.

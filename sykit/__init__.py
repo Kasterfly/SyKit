@@ -2,6 +2,7 @@ import sys as _sys
 
 from . import utils as util
 from .errors import register_error_hook
+from .tasks import enqueue, scheduled, task
 from .uploads import Upload
 from .utils import (
     api_key,
@@ -17,7 +18,7 @@ from .utils import (
     web_hook,
 )
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.
@@ -28,6 +29,7 @@ __all__ = [
     "Upload",
     "api_key",
     "cors",
+    "enqueue",
     "expose",
     "get_session",
     "hidden",
@@ -36,6 +38,8 @@ __all__ = [
     "raw",
     "register_error_hook",
     "requires",
+    "scheduled",
+    "task",
     "update_session",
     "util",
     "web_hook",

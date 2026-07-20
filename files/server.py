@@ -44,8 +44,12 @@ from core._limits import (  # noqa: E402
     RateLimitUnavailable,
 )
 from core._sessions import SessionMiddleware, resolve_store  # noqa: E402
+from core._task_runtime import TaskManager  # noqa: E402
+from core._task_store import resolve_task_store  # noqa: E402
+from core._tasks import TASKS  # noqa: E402
 
 from sykit import errors as error_hooks  # noqa: E402
+from sykit import tasks as task_api  # noqa: E402
 from sykit import util as session_util  # noqa: E402
 from sykit.uploads import Upload  # noqa: E402
 
@@ -576,6 +580,12 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
                 raise EndpointInputError(str(error)) from error
             bound.apply_defaults()
 
+            manager = getattr(request.app.state, "task_manager", None)
+            task_token = (
+                task_api._bind_enqueuer(manager.enqueue)
+                if manager is not None
+                else None
+            )
             session_token = session_util._bind_session(request.session)
             try:
                 if record["is_async"]:
@@ -588,6 +598,8 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
                     )
             finally:
                 session_util._reset_session(session_token)
+                if task_token is not None:
+                    task_api._reset_enqueuer(task_token)
             if isinstance(result, Response):
                 return result
             return JSONResponse(result)
@@ -944,12 +956,14 @@ class HealthMiddleware:
         readiness_path: str,
         session_store,
         api_key_store,
+        task_store=None,
     ) -> None:
         self.application = application
         self.health_path = health_path
         self.readiness_path = readiness_path
         self.session_store = session_store
         self.api_key_store = api_key_store
+        self.task_store = task_store
 
     async def _readiness(self) -> JSONResponse:
         checks: dict[str, str] = {}
@@ -958,21 +972,27 @@ class HealthMiddleware:
                 "sessions",
                 self.session_store,
                 "load",
-                "__sykit_readiness_probe__",
+                ("__sykit_readiness_probe__",),
             ),
             (
                 "api_keys",
                 self.api_key_store,
                 "lookup",
-                hash_key("sykit-readiness-probe"),
+                (hash_key("sykit-readiness-probe"),),
+            ),
+            (
+                "tasks",
+                self.task_store,
+                "ready",
+                (),
             ),
         )
         ready = True
-        for name, store, method_name, argument in probes:
+        for name, store, method_name, arguments in probes:
             if store is None:
                 continue
             try:
-                await run_in_threadpool(getattr(store, method_name), argument)
+                await run_in_threadpool(getattr(store, method_name), *arguments)
             except Exception:
                 ready = False
                 checks[name] = "unavailable"
@@ -1218,7 +1238,32 @@ def create_app():
         raise RuntimeError('The "session-https-only" setting must be true or false.')
     max_age = _positive_integer_setting("session-max-age", 1_209_600)
     store = resolve_store(CONFIG.get("session-store", ""), ROOT)
-    application = Starlette(routes=_routes())
+    task_store = (
+        resolve_task_store(CONFIG.get("task-store", ""), ROOT.parent) if TASKS else None
+    )
+    task_manager = (
+        TaskManager(
+            task_store,
+            TASKS,
+            _positive_integer_setting("task-concurrency", 1),
+            LOGGER,
+        )
+        if task_store is not None
+        else None
+    )
+
+    @asynccontextmanager
+    async def lifespan(_application):
+        if task_manager is not None:
+            await task_manager.start()
+        try:
+            yield
+        finally:
+            if task_manager is not None:
+                await task_manager.stop()
+
+    application = Starlette(routes=_routes(), lifespan=lifespan)
+    application.state.task_manager = task_manager
     application = SessionMiddleware(
         application,
         secret=secret,
@@ -1248,6 +1293,7 @@ def create_app():
         READINESS_PATH,
         store,
         API_KEY_STORE,
+        task_store,
     )
     allowed_hosts = _normalize_allowed_hosts(
         CONFIG.get("allowed-hosts", ["127.0.0.1", "localhost", "::1"])

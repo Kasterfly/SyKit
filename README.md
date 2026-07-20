@@ -61,6 +61,26 @@ python built/main.py
 ```
 The app serves on `http://127.0.0.1:8000` by default.
 
+Endpoints can persist work and return immediately:
+
+```python
+from sykit import enqueue, expose, task
+
+
+@task
+def send_receipt(order_id):
+    email_receipt(order_id)
+
+
+@expose("orders/create")
+def create_order(order_id):
+    return {"task_id": enqueue(send_receipt, order_id)}
+```
+
+Tasks use a sqlite queue by default. Cron schedules, shared stores, delivery
+semantics, and shutdown behavior are covered in
+[Background Tasks](docs/background-tasks.md).
+
 ## Commands
 
 | Command | What it does |
@@ -80,6 +100,8 @@ Commands operate on the current working directory (your project root).
   permissions, CORS, rate limits
 - [Uploads](docs/uploads.md): multipart `File`/`Blob` calls, disk-backed
   temporary files, size limits, validation, and media storage guidance
+- [Background Tasks](docs/background-tasks.md): persistent task calls, UTC
+  cron schedules, queue stores, delivery semantics, and graceful shutdown
 - [Login and Access](docs/auth.md): password helpers, `login`/`logout`,
   permission-gated pages, and server-side session stores
 - [API Keys](docs/apikeys.md): `@api_key` web hooks, the `keys` command,
@@ -106,7 +128,7 @@ python tests/smoke_quickstart.py
 
 ## Status
 
-Beta (`0.10.0`)
+Beta (`0.11.0`)
 
 - Expect breaking changes before 1.0.
 - This is a side-project helper, not a production framework. For production
