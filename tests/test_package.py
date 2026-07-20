@@ -80,6 +80,26 @@ class PackageManagerTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             package._command_remove(package_id)
 
+    def test_python_edits_invalidate_cached_bytecode(self) -> None:
+        module = self.tool / "module.py"
+        module.write_text("value = 'old'\n", encoding="utf-8")
+        cache = self.tool / "__pycache__"
+        cache.mkdir()
+        bytecode = cache / "module.cpython-314.pyc"
+        bytecode.write_bytes(b"stale")
+        source = self.make_package(
+            "bytecode-package",
+            "bytecode-package",
+            edit={"module.py": "value = 'new'\n"},
+        )
+
+        self.add(source)
+        self.assertFalse(bytecode.exists())
+        bytecode.write_bytes(b"new-stale")
+        self.remove("bytecode-package")
+        self.assertFalse(bytecode.exists())
+        self.assertEqual(module.read_text(encoding="utf-8"), "value = 'old'\n")
+
     def test_protected_roots_are_case_insensitive(self) -> None:
         git = self.tool / ".git"
         git.mkdir()

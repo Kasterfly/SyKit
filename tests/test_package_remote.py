@@ -295,6 +295,37 @@ class GithubFlowTests(ServerMixin):
         self.assertNotIn("/Owner/Repo/archive/main.tar.gz", self.server.requests)
         self.assertTrue((result.directory / package.MANIFEST_NAME).is_file())
 
+    def test_full_sha_does_not_need_the_github_api(self) -> None:
+        self.api({})
+        self.route(f"/Owner/Repo/archive/{SHA}.tar.gz", make_package_tarball())
+        result = package_remote.resolve(f"github:Owner/Repo@{SHA}", SETTINGS)
+        self.addCleanup(result.cleanup)
+        self.assertEqual(result.source["resolved_sha"], SHA)
+        self.assertEqual(result.source["ref_type"], "sha")
+
+    def test_update_aborts_when_api_cannot_pin_release(self) -> None:
+        self.api(
+            {
+                "/repos/Owner/Repo/releases/latest": package_remote.ApiUnavailable(
+                    "the GitHub API is unreachable"
+                )
+            }
+        )
+        with self.assertRaisesRegex(package_remote.RemoteError, "full commit SHA"):
+            package_remote.fetch_repo("Owner/Repo", "", SETTINGS)
+
+    def test_update_branch_requires_explicit_allow(self) -> None:
+        self.api({"/repos/Owner/Repo/commits/main": {"sha": SHA}})
+        with self.assertRaisesRegex(package_remote.RemoteError, "allow-unreleased"):
+            package_remote.fetch_repo("Owner/Repo", "main", SETTINGS)
+
+        self.route(f"/Owner/Repo/archive/{SHA}.tar.gz", make_package_tarball())
+        result = package_remote.fetch_repo(
+            "Owner/Repo", "main", SETTINGS, allow_unreleased=True
+        )
+        self.addCleanup(result.cleanup)
+        self.assertEqual(result.source["resolved_sha"], SHA)
+
     def test_api_unavailable_falls_back_to_moving_ref(self) -> None:
         self.api(
             {

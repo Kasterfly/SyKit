@@ -18,6 +18,8 @@ from starlette.datastructures import MutableHeaders
 from starlette.requests import cookie_parser
 from starlette.responses import JSONResponse
 
+from sykit._schema import migrate_schema
+
 LOGGER = logging.getLogger("sykit.server")
 
 # Set by sykit.auth.login(); popped before the session is persisted. In
@@ -29,6 +31,17 @@ DEFAULT_SQLITE_FILE = ".sykit-sessions.sqlite3"
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,128}")
 STORE_METHODS = ("load", "save", "touch", "delete")
 _COOKIE_WARN_BYTES = 4000
+SESSION_MIGRATIONS = (
+    (
+        """
+        CREATE TABLE IF NOT EXISTS sykit_sessions (
+            session_id TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            expires INTEGER NOT NULL
+        )
+        """,
+    ),
+)
 
 
 class SessionStore:
@@ -67,21 +80,16 @@ class SqliteSessionStore(SessionStore):
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5)
-        connection.execute("PRAGMA synchronous=NORMAL")
-        if not self._schema_ready:
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS sykit_sessions (
-                    session_id TEXT PRIMARY KEY,
-                    data TEXT NOT NULL,
-                    expires INTEGER NOT NULL
-                )
-                """
-            )
-            connection.commit()
-            self._schema_ready = True
-        return connection
+        try:
+            connection.execute("PRAGMA synchronous=NORMAL")
+            if not self._schema_ready:
+                connection.execute("PRAGMA journal_mode=WAL")
+                migrate_schema(connection, "sessions", SESSION_MIGRATIONS)
+                self._schema_ready = True
+            return connection
+        except BaseException:
+            connection.close()
+            raise
 
     def load(self, session_id: str) -> dict[str, Any] | None:
         connection = self._connect()

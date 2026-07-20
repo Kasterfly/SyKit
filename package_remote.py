@@ -1,9 +1,9 @@
 """Remote package sources for the SyKit package handler.
 
 Fetches packages from GitHub repositories or https tarball URLs using only
-the standard library. Downloads are pinned to an exact commit when the GitHub
-API is reachable, extraction defends against archive attacks (path traversal,
-links, bombs), and every transport hop must stay on https.
+the standard library. Update downloads require an exact commit pin, package
+downloads report when they cannot be pinned, extraction defends against
+archive attacks, and every transport hop must stay on https.
 """
 
 from __future__ import annotations
@@ -492,6 +492,8 @@ def _resolve_commit(
     ref_type: str | None = None
     sha: str | None = None
     api_down = False
+    if SHA_PATTERN.fullmatch(ref):
+        return ref, "sha", ref, notes
     if not ref and prefer_release:
         try:
             release = _api_json(f"/repos/{owner}/{repo}/releases/latest")
@@ -589,6 +591,8 @@ def fetch_repo(
     repo_spec: str,
     ref: str,
     settings: dict[str, Any],
+    *,
+    allow_unreleased: bool = False,
 ) -> RemotePackage:
     """Fetch a whole GitHub repository tree (for the SyKit update command).
 
@@ -602,7 +606,19 @@ def fetch_repo(
     resolved_ref, ref_type, sha, notes = _resolve_commit(
         owner, repo, ref, prefer_release=True
     )
-    temporary, root = _fetch_tree(owner, repo, sha if sha else resolved_ref, settings)
+    if sha is None:
+        raise RemoteError(
+            "Update aborted because GitHub did not resolve the source to a full "
+            "commit SHA. Try again when the API is available, or pass a full "
+            "40-character commit SHA explicitly."
+        )
+    if ref_type == "branch" and not allow_unreleased:
+        raise RemoteError(
+            f"Update source {resolved_ref!r} is a branch, not a release. "
+            "Use a release tag or full commit SHA. Pass --allow-unreleased "
+            "only when you intentionally want branch content."
+        )
+    temporary, root = _fetch_tree(owner, repo, sha, settings)
     source = {
         "spec": f"github:{owner}/{repo}@{resolved_ref}",
         "kind": "github",

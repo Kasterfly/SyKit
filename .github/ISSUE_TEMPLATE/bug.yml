@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a reproducible SyKit defect
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not report security vulnerabilities here. Use SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: SyKit version
+      placeholder: 0.13.0
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include commands, endpoint code, and the observed output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, Python, Node, deployment, and proxy details.
+    validations:
+      required: true

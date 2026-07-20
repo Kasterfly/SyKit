@@ -32,12 +32,12 @@ def ping(session: dict):
 ```
 ## Requirements
 
-- Python 3.10+
+- Python 3.10 through 3.14
 - Node.js 20.19+, 22.12+, or 24+ on your PATH
 - npm (included with standard Node.js installations)
 
-Frontend build dependencies are pinned and installed from SyKit's lockfile on
-the first build.
+Frontend and backend dependencies are pinned in checked-in lockfiles. The
+human-edited `requirements.in` keeps the supported Python ranges.
 
 ## Quick start
 
@@ -46,8 +46,8 @@ tool folder, not as an installed library:
 
 ```
 cd your-project
-git clone https://github.com/Kasterfly/SyKit
-python -m pip install -r SyKit/requirements.txt
+git clone --branch 0.13.0 --depth 1 https://github.com/Kasterfly/SyKit
+python -m pip install --require-hashes -r SyKit/requirements.lock
 
 python SyKit init  # creates src/ with a minimal starter app
 python SyKit build # generates endpoints and compiles to built/
@@ -89,7 +89,7 @@ semantics, and shutdown behavior are covered in
 | `python SyKit build [--dev]` | Detect endpoints, generate the `$python` client, compile into `built/`; `--dev` also runs the app |
 | `python SyKit keys <generate\|list\|revoke>` | Manage API keys for `@api_key` endpoints |
 | `python SyKit package <add\|remove\|list\|diff>` | Manage packages that extend SyKit; install from local folders, GitHub, or the official packages repo |
-| `python SyKit update [source] [--yes]` | Update the SyKit folder to the latest release; installed packages are removed, the core is replaced, and the packages are reapplied |
+| `python SyKit update [source] [--yes] [--allow-unreleased]` | Update from a commit-pinned release; branch content needs the explicit unreleased flag |
 | `python SyKit version` | Show the SyKit version |
 | `python SyKit help` | Show usage |
 Commands operate on the current working directory (your project root).
@@ -117,20 +117,24 @@ Commands operate on the current working directory (your project root).
 - [Packages](docs/packages.md): reversible add-ons that patch the SyKit tool
   itself, installable from local folders, GitHub repos, or tarball URLs,
   with a pre-install warning report
+- [Compatibility](docs/compatibility.md): the public surfaces and persistent
+  formats being stabilized for 1.0
 
 ## Development
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install --require-hashes -r requirements-dev.lock
 ruff check .
 ruff format --check .
-python -m unittest discover -s tests -v
+python -m coverage run -m unittest discover -s tests
+python -m coverage report
 python tests/smoke_quickstart.py
+python tests/e2e_quickstart.py  # after: python -m playwright install chromium
 ```
 
 ## Status
 
-Beta (`0.12.2`)
+Beta (`0.13.0`)
 
 - Expect breaking changes before 1.0.
 - This is a side-project helper, not a production framework. For production

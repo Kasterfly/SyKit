@@ -1,11 +1,11 @@
 """Update the SyKit tool folder to a new release, keeping packages.
 
-    python SyKit update [source] [--yes]
+    python SyKit update [source] [--yes] [--allow-unreleased]
 
 Without a source this fetches the latest release of the update repo (the
-"update-repo" tool setting, default Kasterfly/SyKit), falling back to
-the default branch. The source can also be a tag, branch, or commit of
-that repo, or a local folder holding a SyKit tree.
+"update-repo" tool setting, default Kasterfly/SyKit). GitHub updates must
+resolve to a full commit SHA. A branch requires --allow-unreleased; a local
+folder or full commit SHA remains an explicit source.
 
 The command removes every installed package (removal restores a clean
 core), replaces the core files with the fetched release, then reapplies
@@ -226,7 +226,11 @@ def _reapply_from_copies(
     return results
 
 
-def _command_update(source_argument: str, assume_yes: bool) -> bool:
+def _command_update(
+    source_argument: str,
+    assume_yes: bool,
+    allow_unreleased: bool = False,
+) -> bool:
     current = _tree_version(TOOL_DIR)
     order = package._load_index()
     records = {entry: package._load_record(entry) for entry in order}
@@ -241,7 +245,10 @@ def _command_update(source_argument: str, assume_yes: bool) -> bool:
 
         repo = _update_repo_setting()
         remote = package_remote.fetch_repo(
-            repo, source_argument, package._tool_settings()
+            repo,
+            source_argument,
+            package._tool_settings(),
+            allow_unreleased=allow_unreleased,
         )
         new_root = remote.directory
         notes.append(f"Origin: {remote.source['spec']}")
@@ -345,21 +352,28 @@ def _command_update(source_argument: str, assume_yes: bool) -> bool:
 
 def run(arguments: list[str]) -> bool:
     assume_yes = False
+    allow_unreleased = False
     positional: list[str] = []
     for argument in arguments:
         lowered = argument.lower()
         if lowered == "--yes":
             assume_yes = True
+        elif lowered == "--allow-unreleased":
+            allow_unreleased = True
         elif lowered.startswith("--"):
             print(f"Unknown update option: {argument}")
             return False
         else:
             positional.append(argument)
     if len(positional) > 1:
-        print("Usage: python SyKit update [ref-or-folder] [--yes]")
+        print("Usage: python SyKit update [ref-or-folder] [--yes] [--allow-unreleased]")
         return False
     try:
-        return _command_update(positional[0] if positional else "", assume_yes)
+        return _command_update(
+            positional[0] if positional else "",
+            assume_yes,
+            allow_unreleased,
+        )
     except (package.PackageError, OSError) as error:
         print(f"Update failed: {error}")
         return False

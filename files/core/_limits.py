@@ -10,7 +10,30 @@ from typing import Any
 
 from starlette.concurrency import run_in_threadpool
 
+from sykit._schema import migrate_schema
+
 _SESSION_ID_KEY = "__sykit_rate_id"
+RATE_LIMIT_MIGRATIONS = (
+    (
+        """
+        CREATE TABLE IF NOT EXISTS sykit_rate_limits (
+            scope TEXT NOT NULL,
+            endpoint TEXT NOT NULL,
+            identity TEXT NOT NULL,
+            window_seconds INTEGER NOT NULL,
+            window_start INTEGER NOT NULL,
+            request_count INTEGER NOT NULL,
+            PRIMARY KEY (
+                scope,
+                endpoint,
+                identity,
+                window_seconds,
+                window_start
+            )
+        )
+        """,
+    ),
+)
 
 
 class RateLimitExceeded(RuntimeError):
@@ -135,26 +158,7 @@ class RateLimiter:
         if self._schema_ready:
             return
         connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sykit_rate_limits (
-                scope TEXT NOT NULL,
-                endpoint TEXT NOT NULL,
-                identity TEXT NOT NULL,
-                window_seconds INTEGER NOT NULL,
-                window_start INTEGER NOT NULL,
-                request_count INTEGER NOT NULL,
-                PRIMARY KEY (
-                    scope,
-                    endpoint,
-                    identity,
-                    window_seconds,
-                    window_start
-                )
-            )
-            """
-        )
-        connection.commit()
+        migrate_schema(connection, "rate-limits", RATE_LIMIT_MIGRATIONS)
         self._schema_ready = True
 
     def _check_shared(

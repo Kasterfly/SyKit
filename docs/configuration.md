@@ -1,7 +1,8 @@
 # Configuration
 
-`init` places `sykit/config.json` inside `src/`. Every key is optional; the
-defaults below apply when a key is missing.
+`init` places `sykit/config.json` inside `src/`. Every listed key is optional;
+the defaults below apply when a key is missing. Unknown top-level keys stop the
+build instead of silently selecting a default.
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -28,6 +29,7 @@ defaults below apply when a key is missing.
 | `content-security-policy` | none | Content-Security-Policy header sent with every response; an empty string disables it. `default-src 'self'` is a good starting point for most apps |
 | `use-dotenv` | `false` | Load `.env` from the project root at startup (needs `python-dotenv`); build creates the file if missing, protects it on POSIX, and adds it to `.gitignore` |
 | `sykit-folder-path` | `""` | Where the `sykit/` folder lives inside `src/` (relative path; `""` means `src/sykit`, and path "example/" means `src/example/sykit`) |
+| `extensions` | `{}` | Reserved object for package-specific configuration; each package should own one child key |
 | `default-perms` | `{}` | Permissions applied to endpoints without their own `@perms` |
 | `page-perms` | `{}` | Page path prefixes gated by session permissions; denied requests get the same response as a nonexistent page ([details](auth.md#permission-gated-pages)) |
 | `default-CORS` | `[]` | CORS origins applied to endpoints without their own `@cors` |
@@ -54,7 +56,16 @@ gets the same dependency tree. Setting an entry in `frontend-packages` opts
 that project into a custom npm resolution and a cache-local lockfile.
 
 Supported Node.js versions are 20.19+, 22.12+, and 24+. SyKit checks this
-before installing frontend dependencies.
+before installing frontend dependencies. CI explicitly tests Node 22.12 and
+every documented Python minor from 3.10 through 3.14.
+
+## Backend dependencies
+
+`requirements.in` holds supported runtime ranges. `requirements.lock` pins the
+resolved runtime tree with hashes and is the install source for CI, generated
+apps, and Docker. `requirements-dev.in` and `requirements-dev.lock` do the same
+for development tools. Regenerate locks with pip-tools after changing an input;
+do not hand-edit the generated files.
 
 ## Reverse proxies
 

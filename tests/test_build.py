@@ -58,6 +58,29 @@ class FrontendManifestTests(unittest.TestCase):
         )
 
 
+class ConfigurationContractTests(unittest.TestCase):
+    def _config(self, value: object) -> Path:
+        temporary = tempfile.TemporaryDirectory(prefix="sykit-config-test-")
+        self.addCleanup(temporary.cleanup)
+        path = Path(temporary.name) / "config.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def test_unknown_top_level_key_is_rejected(self) -> None:
+        path = self._config({"session-https-onyl": True})
+        with self.assertRaisesRegex(build.BuildError, "unknown top-level keys"):
+            build.load_config(path)
+
+    def test_extensions_is_the_reserved_namespace(self) -> None:
+        path = self._config({"extensions": {"example": {"enabled": True}}})
+        self.assertEqual(
+            build.load_config(path)["extensions"]["example"]["enabled"],
+            True,
+        )
+        with self.assertRaisesRegex(build.BuildError, "must be an object"):
+            build.load_config(self._config({"extensions": []}))
+
+
 @unittest.skipUnless(NODE, "Node.js is required for generated-client tests")
 class GeneratedClientTests(unittest.TestCase):
     def test_previous_collisions_are_valid_and_callable(self) -> None:

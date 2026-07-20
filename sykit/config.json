@@ -23,6 +23,7 @@
     "content-security-policy": "",
     "use-dotenv": false,
     "sykit-folder-path": "",
+    "extensions": {},
 
     "default-perms": {},
     "page-perms": {},

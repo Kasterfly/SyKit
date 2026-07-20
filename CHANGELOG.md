@@ -1,0 +1,23 @@
+# Changelog
+
+All notable SyKit changes are listed here. Detailed release notes remain under
+`docs/changelogs/`.
+
+## 0.13.0 - 2026-07-20
+
+- Made self-updates fail closed unless the source resolves to a full commit.
+- Invalidated stale Python bytecode after package edits and rollbacks.
+- Added hash-locked backend dependencies and hardened generated containers.
+- Added versioned SQLite migrations and strict top-level config validation.
+- Added browser, container, compatibility, coverage, and release checks.
+- Added security, support, contribution, migration, and compatibility docs.
+
+## 0.12.2 - 2026-07-20
+
+- Closed hidden-endpoint method probing gaps.
+- Charged failed authentication requests against configured rate limits.
+- Added trusted reverse-proxy support and security-event logging.
+
+## Earlier beta releases
+
+See `docs/changelogs/` for 0.1.0 through 0.12.1 release notes.

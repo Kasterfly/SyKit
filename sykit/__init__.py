@@ -19,7 +19,8 @@ from .utils import (
     web_hook,
 )
 
-__version__ = "0.12.2"
+# Keep this literal in sync with README, CHANGELOG.md, and the release tag.
+__version__ = "0.13.0"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.

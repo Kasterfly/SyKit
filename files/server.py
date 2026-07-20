@@ -34,6 +34,42 @@ STATIC_ROOT = STATIC_DIR.resolve()
 CONFIG_PATH = ROOT / "config.json"
 SESSION_COOKIE = "sykit_session"
 LOGGER = logging.getLogger("sykit.server")
+CONFIG_KEYS = frozenset(
+    {
+        "allowed-hosts",
+        "apikey-store",
+        "cache-svelte",
+        "content-security-policy",
+        "default-CORS",
+        "default-limits",
+        "default-perms",
+        "docker",
+        "endpoints",
+        "extensions",
+        "frontend-packages",
+        "health-path",
+        "host-ip",
+        "host-port",
+        "log-format",
+        "log-level",
+        "max-request-bytes",
+        "package-default-repo",
+        "package-max-download-mb",
+        "page-perms",
+        "readiness-path",
+        "session-https-only",
+        "session-max-age",
+        "session-store",
+        "sse-heartbeat-seconds",
+        "sykit-folder-path",
+        "task-concurrency",
+        "task-store",
+        "trust-proxy",
+        "update-repo",
+        "use-dotenv",
+        "workers",
+    }
+)
 
 if str(APP_DIR) not in sys.path:
     sys.path.insert(1, str(APP_DIR))
@@ -185,6 +221,13 @@ def _load_config() -> dict[str, Any]:
         raise RuntimeError(f"Could not load {CONFIG_PATH}: {error}") from error
     if not isinstance(value, dict):
         raise RuntimeError(f"{CONFIG_PATH} must contain a JSON object.")
+    unknown = sorted(set(value) - CONFIG_KEYS)
+    if unknown:
+        raise RuntimeError(
+            f"{CONFIG_PATH} has unknown top-level keys: " + ", ".join(unknown) + "."
+        )
+    if not isinstance(value.get("extensions", {}), dict):
+        raise RuntimeError('The "extensions" setting must be an object.')
     return value
 
 

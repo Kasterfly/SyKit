@@ -145,6 +145,22 @@ def _restore_file_state(path: Path, state: bytes | None) -> None:
         _write_bytes_atomic(path, state)
 
 
+def _invalidate_bytecode(path: Path) -> None:
+    if path.suffix.casefold() != ".py":
+        return
+    cache = path.parent / "__pycache__"
+    if not cache.is_dir():
+        return
+    prefix = path.stem + "."
+    for candidate in cache.iterdir():
+        if (
+            candidate.is_file()
+            and candidate.name.startswith(prefix)
+            and candidate.suffix.casefold() == ".pyc"
+        ):
+            candidate.unlink()
+
+
 def _is_windows_reserved_component(value: str) -> bool:
     stem = value.rstrip(" .").split(".", 1)[0].casefold()
     return stem in WINDOWS_DEVICE_NAMES
@@ -833,6 +849,7 @@ def _apply_package(
                         directory.mkdir()
                         made_dirs.append(directory)
                 destination.write_bytes(change.after or b"")
+            _invalidate_bytecode(destination)
             applied.append(change)
         order.append(manifest.id)
         _save_index(order)
@@ -848,6 +865,7 @@ def _apply_package(
                 else:
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(change.before)
+                _invalidate_bytecode(destination)
             except (OSError, PackageError):
                 pass
         for directory in reversed(made_dirs):
@@ -871,6 +889,7 @@ def _reverse_package(record: dict[str, Any]) -> None:
             before = (entry / BEFORE_NAME / PurePosixPath(change["path"])).read_bytes()
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(before)
+        _invalidate_bytecode(destination)
     for relative in reversed(record["created-dirs"]):
         try:
             (TOOL_DIR / PurePosixPath(relative)).rmdir()
@@ -1218,6 +1237,7 @@ def _command_remove(package_id: str) -> None:
                 else:
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(data)
+                _invalidate_bytecode(path)
             for relative in sorted(
                 existing_created_dirs,
                 key=lambda item: len(PurePosixPath(item).parts),

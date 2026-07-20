@@ -9,6 +9,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from sykit._schema import migrate_schema
+
 DEFAULT_SQLITE_FILE = ".sykit-tasks.sqlite3"
 STORE_METHODS = (
     "enqueue",
@@ -19,6 +21,36 @@ STORE_METHODS = (
     "fail",
     "release",
     "ready",
+)
+TASK_MIGRATIONS = (
+    (
+        """
+        CREATE TABLE IF NOT EXISTS sykit_tasks (
+            task_id TEXT PRIMARY KEY,
+            task_name TEXT NOT NULL,
+            args TEXT NOT NULL,
+            kwargs TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created REAL NOT NULL,
+            available REAL NOT NULL,
+            claimed_by TEXT,
+            lease_until REAL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            finished REAL,
+            last_error TEXT
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS sykit_tasks_claim
+        ON sykit_tasks (status, available, lease_until, created)
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS sykit_schedule_runs (
+            schedule_key TEXT PRIMARY KEY,
+            created REAL NOT NULL
+        )
+        """,
+    ),
 )
 
 
@@ -71,38 +103,18 @@ class SqliteTaskStore(TaskStore):
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5)
-        connection.execute("PRAGMA synchronous=NORMAL")
-        if not self._schema_ready:
-            with self._schema_lock:
-                if not self._schema_ready:
-                    connection.execute("PRAGMA journal_mode=WAL")
-                    connection.executescript(
-                        """
-                        CREATE TABLE IF NOT EXISTS sykit_tasks (
-                            task_id TEXT PRIMARY KEY,
-                            task_name TEXT NOT NULL,
-                            args TEXT NOT NULL,
-                            kwargs TEXT NOT NULL,
-                            status TEXT NOT NULL,
-                            created REAL NOT NULL,
-                            available REAL NOT NULL,
-                            claimed_by TEXT,
-                            lease_until REAL,
-                            attempts INTEGER NOT NULL DEFAULT 0,
-                            finished REAL,
-                            last_error TEXT
-                        );
-                        CREATE INDEX IF NOT EXISTS sykit_tasks_claim
-                            ON sykit_tasks (status, available, lease_until, created);
-                        CREATE TABLE IF NOT EXISTS sykit_schedule_runs (
-                            schedule_key TEXT PRIMARY KEY,
-                            created REAL NOT NULL
-                        );
-                        """
-                    )
-                    connection.commit()
-                    self._schema_ready = True
-        return connection
+        try:
+            connection.execute("PRAGMA synchronous=NORMAL")
+            if not self._schema_ready:
+                with self._schema_lock:
+                    if not self._schema_ready:
+                        connection.execute("PRAGMA journal_mode=WAL")
+                        migrate_schema(connection, "tasks", TASK_MIGRATIONS)
+                        self._schema_ready = True
+            return connection
+        except BaseException:
+            connection.close()
+            raise
 
     @staticmethod
     def _json(value: Any) -> str:

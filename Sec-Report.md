@@ -1,18 +1,59 @@
-# SyKit Security Report - Built-Site Review
+# SyKit Security Report
 
-> **Status:** findings 1-3 fixed in 0.12.2 (`docs/changelogs/update-0.12.2.md`);
-> findings 4-10 addressed via startup warnings, security-event logging, and
-> documentation in the same release.
+> **Status:** the built-site findings were addressed in 0.12.2. The package,
+> remote-download, and self-update subsystems were reviewed for 0.13.0, and
+> the fail-open updater finding was fixed.
 
-- **Project:** SyKit 0.12.1 (beta)
-- **Scope:** the code that ends up in `built/` and serves traffic: `files/server.py`, `files/core/*`, `sykit/*` (runtime package), and the `build.py` code generation that produces the endpoint manifests and the `$python` client.
-- **Out of scope (per request):** the package system (`package.py`, `package_remote.py`, `package_analysis.py`) and `update.py`.
-- **Method:** full manual code review plus live probes of the runtime (the built app was reproduced in a scratch directory and exercised over its ASGI interface with the pinned dependency versions: starlette 1.3.1, uvicorn 0.51.0, Python 3.14).
-- **Result:** 1 medium, 2 low-medium, and several low/informational findings. No critical or high issues. The baseline posture is good - see "Verified solid" at the end.
+- **Project:** SyKit 0.13.0 (beta)
+- **Scope:** `build.py`, the generated runtime under `files/`, the public
+  `sykit/` package, `package.py`, `package_remote.py`, `package_analysis.py`,
+  and `update.py`.
+- **Method:** manual data-flow and trust-boundary review, adversarial unit
+  tests, a built-app browser flow through a reverse proxy, and a generated
+  container start using locked dependencies.
+- **Result:** the updater's API-outage fallback was a release-blocking
+  supply-chain issue and is fixed in 0.13.0. No additional critical or high
+  issues were found in the package transaction, archive extraction, analysis,
+  or rollback paths. Historical built-site findings remain below.
 
 ---
 
-## Findings
+## 0.13.0 package and updater review
+
+The review traced every remote source from parsing through resolution,
+download, extraction, analysis, apply, provenance recording, removal, update,
+and rollback.
+
+Verified controls:
+
+- Remote transports and redirect hops require HTTPS. Credential-bearing URLs,
+  unsafe archive members, case collisions, links, devices, excessive entry
+  counts, and configured size-limit violations are rejected.
+- Package analysis and apply use the same stored source snapshot and verify its
+  content hash immediately before applying.
+- Package writes are planned before mutation, use backups, and roll back on a
+  failed operation. Protected roots cannot be package targets.
+- Self-update preserves `.git` and `.packages`, snapshots installed packages,
+  restores the old core on swap failure, and reports packages that cannot be
+  reapplied.
+- Self-update now requires a full commit SHA. GitHub API failures abort before
+  archive download, `--yes` does not bypass the check, and branch updates need
+  `--allow-unreleased`.
+- A caller may provide a full 40-character SHA without GitHub API access. That
+  is already an immutable identifier and is downloaded by that exact value.
+
+Residual trust model:
+
+- Installing a package still grants it SyKit-level code execution. Static
+  analysis is review assistance, not a sandbox or signature verifier.
+- Package installs, unlike self-updates, may intentionally use an unpinned
+  moving ref or an HTTPS tarball after a visible warning and confirmation.
+  Official package releases should use protected tags.
+- GitHub tag protection, tag signing, and immutable-release enforcement are
+  repository controls outside this source tree. The release checklist requires
+  them before 1.0.
+
+## Historical built-site findings
 
 ### 1. Medium - Hidden endpoints are enumerable with non-standard HTTP methods (verified)
 

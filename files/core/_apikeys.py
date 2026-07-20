@@ -10,12 +10,28 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from sykit._schema import migrate_schema
+
 KEY_PREFIX = "sykit"
 KEY_HEADER = "x-api-key"
 DEFAULT_SQLITE_FILE = ".sykit-apikeys.sqlite3"
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 _.:-]{0,63}")
 SCOPE_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
 STORE_METHODS = ("lookup", "create", "list_keys", "revoke")
+API_KEY_MIGRATIONS = (
+    (
+        """
+        CREATE TABLE IF NOT EXISTS sykit_api_keys (
+            key_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            key_hash TEXT NOT NULL UNIQUE,
+            scopes TEXT NOT NULL,
+            created INTEGER NOT NULL,
+            revoked INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+    ),
+)
 
 
 class ApiKeyError(RuntimeError):
@@ -98,24 +114,16 @@ class SqliteApiKeyStore(ApiKeyStore):
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5)
-        connection.execute("PRAGMA synchronous=NORMAL")
-        if not self._schema_ready:
-            connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute(
-                """
-                CREATE TABLE IF NOT EXISTS sykit_api_keys (
-                    key_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    key_hash TEXT NOT NULL UNIQUE,
-                    scopes TEXT NOT NULL,
-                    created INTEGER NOT NULL,
-                    revoked INTEGER NOT NULL DEFAULT 0
-                )
-                """
-            )
-            connection.commit()
-            self._schema_ready = True
-        return connection
+        try:
+            connection.execute("PRAGMA synchronous=NORMAL")
+            if not self._schema_ready:
+                connection.execute("PRAGMA journal_mode=WAL")
+                migrate_schema(connection, "api-keys", API_KEY_MIGRATIONS)
+                self._schema_ready = True
+            return connection
+        except BaseException:
+            connection.close()
+            raise
 
     @staticmethod
     def _record(row: tuple) -> dict[str, Any]:

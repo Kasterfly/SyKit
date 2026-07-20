@@ -127,7 +127,7 @@ the folder with `git pull` while packages are installed will conflict or
 silently mismatch. Use the update command instead:
 
 ```
-python SyKit update [source] [--yes]
+python SyKit update [source] [--yes] [--allow-unreleased]
 ```
 
 It removes every installed package (removal restores the original files
@@ -142,10 +142,11 @@ uninstalled; look for a newer release of that package and
 Details:
 
 - Without a source, the latest release of the `update-repo` tool setting
-  (default `Kasterfly/SyKit`) is fetched, falling back to the default
-  branch; refs are pinned to exact commits like package installs. The
-  source can also be a tag, branch, or commit of that repo, or a local
-  folder holding a SyKit tree (useful offline).
+  (default `Kasterfly/SyKit`) is fetched and resolved to a full commit SHA.
+  An API outage, rate limit, or unpinned result aborts before download.
+- A branch source requires `--allow-unreleased` and must still resolve to a
+  full commit SHA. A release tag, full SHA, or local SyKit tree is accepted
+  without that flag. `--yes` never weakens these source checks.
 - The prompt defaults to No and a closed stdin aborts; pass `--yes` for
   scripts. Same-version updates stop early; downgrades warn.
 - `.git/` and `.packages/` are preserved; everything else in the tool

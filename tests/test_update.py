@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import shutil
 import subprocess
@@ -7,6 +9,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+import package_remote
+import update
 
 ROOT = Path(__file__).resolve().parents[1]
 IGNORE = shutil.ignore_patterns(
@@ -233,6 +239,27 @@ class UpdateCommandTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("sykit/config.json was replaced", result.stdout)
         self.assertIn("package-default-repo", result.stdout)
+
+    def test_yes_still_fails_closed_when_github_api_is_down(self) -> None:
+        error = package_remote.ApiUnavailable("the GitHub API is unreachable")
+        with mock.patch.object(
+            package_remote, "fetch_repo", side_effect=error
+        ) as fetch:
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                result = update.run(["--yes"])
+        self.assertFalse(result)
+        self.assertIn("Update failed", output.getvalue())
+        self.assertFalse(fetch.call_args.kwargs["allow_unreleased"])
+
+    def test_allow_unreleased_flag_is_forwarded(self) -> None:
+        error = package_remote.ApiUnavailable("the GitHub API is unreachable")
+        with mock.patch.object(
+            package_remote, "fetch_repo", side_effect=error
+        ) as fetch:
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = update.run(["main", "--yes", "--allow-unreleased"])
+        self.assertFalse(result)
+        self.assertTrue(fetch.call_args.kwargs["allow_unreleased"])
 
 
 if __name__ == "__main__":

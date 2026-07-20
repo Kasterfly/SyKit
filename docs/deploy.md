@@ -9,8 +9,9 @@ the docker toggle, Compose, and Swarm notes.
 Set `"docker": true` in `src/sykit/config.json` and rebuild. The build
 then also writes three files into `built/`:
 
-- `Dockerfile`: `python:3.12-slim`, installs `requirements.txt`, exposes
-  `host-port`, runs `python main.py`.
+- `Dockerfile`: pins the Python 3.12.13 slim-trixie image by OCI index digest,
+  installs the hash-locked `requirements.txt`, exposes `host-port`, and runs
+  `python main.py` as the unprivileged `sykit` user.
 - `compose.yaml`: builds the image, publishes the port, passes
   `SYKIT_SESSION_SECRET` through from the host environment (Compose
   refuses to start without it), probes the configured `health-path`,
@@ -35,6 +36,9 @@ Two settings matter in containers:
   `localhost`).
 - `"health-path"` is used by the generated Compose healthcheck. The
   default `/healthz` works without further configuration.
+- Bind-mounted directories must be writable by the container's non-root
+  `sykit` user. Set host ownership and permissions deliberately; do not switch
+  the generated image back to root to hide a volume-permission problem.
 
 ## State in containers
 
@@ -109,5 +113,5 @@ Notes for more than one replica (Swarm or otherwise):
 ## Without docker
 
 Nothing in `built/` requires docker: copy the folder to the server,
-install `requirements.txt` into a virtualenv, set the secret, and run
+install `requirements.txt` into a virtualenv with `--require-hashes`, set the secret, and run
 `python main.py` under your process manager of choice.
