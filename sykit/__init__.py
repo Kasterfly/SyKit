@@ -20,7 +20,7 @@ from .utils import (
 )
 
 # Keep this literal in sync with README, CHANGELOG.md, and the release tag.
-__version__ = "0.13.0"
+__version__ = "0.13.1"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.

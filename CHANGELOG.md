@@ -3,6 +3,11 @@
 All notable SyKit changes are listed here. Detailed release notes remain under
 `docs/changelogs/`.
 
+## 0.13.1 - 2026-07-20
+
+- Fixed the container CI job to invoke SyKit from the checkout root.
+- Added a regression test for the checkout-root command paths.
+
 ## 0.13.0 - 2026-07-20
 
 - Made self-updates fail closed unless the source resolves to a full commit.

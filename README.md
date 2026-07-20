@@ -46,7 +46,7 @@ tool folder, not as an installed library:
 
 ```
 cd your-project
-git clone --branch 0.13.0 --depth 1 https://github.com/Kasterfly/SyKit
+git clone --branch 0.13.1 --depth 1 https://github.com/Kasterfly/SyKit
 python -m pip install --require-hashes -r SyKit/requirements.lock
 
 python SyKit init  # creates src/ with a minimal starter app
@@ -134,7 +134,7 @@ python tests/e2e_quickstart.py  # after: python -m playwright install chromium
 
 ## Status
 
-Beta (`0.13.0`)
+Beta (`0.13.1`)
 
 - Expect breaking changes before 1.0.
 - This is a side-project helper, not a production framework. For production
