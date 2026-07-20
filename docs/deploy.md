@@ -49,6 +49,23 @@ the app folder disappears with it:
   file deliberately.
 - Rate limits are per-container by design; that is usually fine.
 
+## Uploaded media
+
+The generated `built/static/` directory is the compiled frontend, not a
+writable media store. A rebuild replaces it, and multiple replicas do not
+share it. Keep uploaded files outside `built/`.
+
+For local media, write to a dedicated mounted directory with generated file
+names, then let a trusted reverse proxy serve only the paths meant to be
+public. Files that need authorization should go through an authenticated
+endpoint instead. For multiple replicas or durable cloud deployments, copy
+uploads to object storage while the endpoint is running. An object-storage
+package can provide that integration without changing SyKit's multipart API.
+
+Set the reverse proxy's request-body limit intentionally. It may be lower than
+SyKit's `max-request-bytes`, but should not be higher by accident. See
+[Uploads](uploads.md) for validation and temporary-file lifetime rules.
+
 ## Docker Swarm and multiple replicas
 
 The generated compose file works as a stack file:

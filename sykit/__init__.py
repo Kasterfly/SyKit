@@ -2,6 +2,7 @@ import sys as _sys
 
 from . import utils as util
 from .errors import register_error_hook
+from .uploads import Upload
 from .utils import (
     api_key,
     cors,
@@ -16,7 +17,7 @@ from .utils import (
     web_hook,
 )
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
 
 
 # Keep ``import sykit.util`` working while maintaining one utility module.
@@ -24,6 +25,7 @@ _sys.modules[f"{__name__}.util"] = util
 
 __all__ = [
     "__version__",
+    "Upload",
     "api_key",
     "cors",
     "expose",

@@ -204,6 +204,7 @@ class ParameterInfo:
     name: str
     injected: bool
     required: bool
+    upload: bool = False
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,7 @@ class EndpointInfo:
     hidden: bool = False
     token: str | None = None
     api_key: dict[str, Any] | None = None
+    max_upload_bytes: int | None = None
 
     @property
     def client_parameters(self) -> tuple[ParameterInfo, ...]:
@@ -323,6 +325,45 @@ def _literal_argument(decorator: ast.Call, name: str, path: Path) -> Any:
         return ast.literal_eval(decorator.args[0])
     except (ValueError, TypeError) as error:
         raise BuildError(f"{path}: @{name} requires a literal value.") from error
+
+
+def _route_arguments(
+    decorator: ast.Call,
+    name: str,
+    path: Path,
+) -> tuple[Any, int | None]:
+    if name != "expose":
+        return _literal_argument(decorator, name, path), None
+    if len(decorator.args) != 1:
+        raise BuildError(
+            f"{path}: @expose needs one literal endpoint path and may include "
+            "max_upload_bytes as a keyword."
+        )
+    unknown = [
+        keyword.arg
+        for keyword in decorator.keywords
+        if keyword.arg != "max_upload_bytes"
+    ]
+    if unknown:
+        displayed = "**options" if None in unknown else str(unknown[0])
+        raise BuildError(f"{path}: unsupported @expose option {displayed!r}.")
+    try:
+        endpoint = ast.literal_eval(decorator.args[0])
+        limits = [
+            ast.literal_eval(keyword.value)
+            for keyword in decorator.keywords
+            if keyword.arg == "max_upload_bytes"
+        ]
+    except (ValueError, TypeError) as error:
+        raise BuildError(f"{path}: @expose requires literal values.") from error
+    if len(limits) > 1:
+        raise BuildError(f"{path}: @expose may set max_upload_bytes only once.")
+    maximum = limits[0] if limits else None
+    if maximum is not None and (
+        isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 1
+    ):
+        raise BuildError(f"{path}: max_upload_bytes must be a positive integer.")
+    return endpoint, maximum
 
 
 def _normalize_endpoint(value: Any, path: Path) -> str:
@@ -509,11 +550,27 @@ def apply_endpoint_defaults(
     endpoints: list[EndpointInfo],
     config_path: Path,
 ) -> list[EndpointInfo]:
+    max_request_bytes = config.get("max-request-bytes", 1_048_576)
+    if (
+        isinstance(max_request_bytes, bool)
+        or not isinstance(max_request_bytes, int)
+        or max_request_bytes < 1
+    ):
+        raise BuildError(f'{config_path}: "max-request-bytes" must be positive.')
     default_permissions = _validate_permissions(
         config.get("default-perms", {}), config_path
     )
     default_cors = _validate_cors(config.get("default-CORS", []), config_path)
     default_limits = _validate_limits(config.get("default-limits", {}), config_path)
+    for endpoint in endpoints:
+        if (
+            endpoint.max_upload_bytes is not None
+            and endpoint.max_upload_bytes > max_request_bytes
+        ):
+            raise BuildError(
+                f"{endpoint.file}: max_upload_bytes cannot exceed the global "
+                f'"max-request-bytes" value ({max_request_bytes}).'
+            )
     return [
         replace(
             endpoint,
@@ -566,6 +623,52 @@ def _module_name(path: Path, source_root: Path) -> str:
     return ".".join(parts)
 
 
+def _annotation_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _is_none_annotation(node: ast.expr) -> bool:
+    return (isinstance(node, ast.Constant) and node.value is None) or (
+        isinstance(node, ast.Name) and node.id == "None"
+    )
+
+
+def _is_upload_annotation(node: ast.expr | None) -> bool:
+    if node is None:
+        return False
+    if _annotation_name(node) == "Upload":
+        return True
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        members: list[ast.expr] = []
+
+        def collect(item: ast.expr) -> None:
+            if isinstance(item, ast.BinOp) and isinstance(item.op, ast.BitOr):
+                collect(item.left)
+                collect(item.right)
+            else:
+                members.append(item)
+
+        collect(node)
+        return sum(_annotation_name(item) == "Upload" for item in members) == 1 and all(
+            _annotation_name(item) == "Upload" or _is_none_annotation(item)
+            for item in members
+        )
+    if isinstance(node, ast.Subscript) and _annotation_name(node.value) in {
+        "Optional",
+        "Union",
+    }:
+        values = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
+        return sum(_annotation_name(item) == "Upload" for item in values) == 1 and all(
+            _annotation_name(item) == "Upload" or _is_none_annotation(item)
+            for item in values
+        )
+    return False
+
+
 def _parameter_info(
     node: ast.FunctionDef | ast.AsyncFunctionDef, path: Path
 ) -> tuple[ParameterInfo, ...]:
@@ -590,6 +693,7 @@ def _parameter_info(
                 name=argument.arg,
                 injected=argument.arg in INJECTED_PARAMETERS,
                 required=not has_default and argument.arg not in INJECTED_PARAMETERS,
+                upload=_is_upload_annotation(argument.annotation),
             )
         )
     for argument, default in zip(arguments.kwonlyargs, arguments.kw_defaults):
@@ -598,10 +702,16 @@ def _parameter_info(
                 name=argument.arg,
                 injected=argument.arg in INJECTED_PARAMETERS,
                 required=default is None and argument.arg not in INJECTED_PARAMETERS,
+                upload=_is_upload_annotation(argument.annotation),
             )
         )
 
     for parameter in parameters:
+        if parameter.injected and parameter.upload:
+            raise BuildError(
+                f"{path}:{node.lineno}: injected parameter {parameter.name!r} "
+                "cannot be annotated as Upload."
+            )
         if parameter.name in JS_RESERVED_WORDS and not parameter.injected:
             raise BuildError(
                 f"{path}:{node.lineno}: parameter {parameter.name!r} is reserved in JavaScript."
@@ -627,6 +737,7 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
 
         endpoint_kind: str | None = None
         endpoint_path: str | None = None
+        max_upload_bytes: int | None = None
         permissions: dict[str, Any] | None = None
         cors: tuple[str, ...] | None = None
         endpoint_limits: dict[str, dict[str, int] | None] | None = None
@@ -671,8 +782,14 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
                     )
                 decorator = cast(ast.Call, decorator)
                 endpoint_kind = name
+                route_value, max_upload_bytes = _route_arguments(
+                    decorator,
+                    name,
+                    path,
+                )
                 endpoint_path = _normalize_endpoint(
-                    _literal_argument(decorator, name, path), path
+                    route_value,
+                    path,
                 )
             elif name in {"perms", "requires"}:
                 if permissions is not None:
@@ -711,6 +828,18 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
 
         if endpoint_kind is None or endpoint_path is None:
             continue
+        parameters = _parameter_info(node, path)
+        upload_parameters = [item for item in parameters if item.upload]
+        if upload_parameters and endpoint_kind != "expose":
+            raise BuildError(
+                f"{path}:{node.lineno}: Upload parameters are only supported on "
+                "@expose endpoints."
+            )
+        if max_upload_bytes is not None and not upload_parameters:
+            raise BuildError(
+                f"{path}:{node.lineno}: max_upload_bytes requires at least one "
+                "Upload parameter."
+            )
         if is_hidden and cors is not None:
             raise BuildError(
                 f"{path}:{node.lineno}: @hidden cannot be combined with @cors; "
@@ -754,12 +883,13 @@ def parse_decorators(path: Path, source_root: Path = SRC_DIR) -> list[EndpointIn
                 module=_module_name(path, source_root),
                 file=path.relative_to(source_root).as_posix(),
                 is_async=isinstance(node, ast.AsyncFunctionDef),
-                parameters=_parameter_info(node, path),
+                parameters=parameters,
                 permissions=permissions,
                 cors=cors,
                 limits=endpoint_limits,
                 hidden=is_hidden,
                 api_key=api_key_info,
+                max_upload_bytes=max_upload_bytes,
             )
         )
     return results
@@ -830,6 +960,7 @@ def generate_backend_manifest(endpoints: list[EndpointInfo]) -> str:
             "hidden": endpoint.hidden,
             "token": endpoint.token,
             "api_key": endpoint.api_key,
+            "max_upload_bytes": endpoint.max_upload_bytes,
         }
         python_metadata = repr(metadata)
         lines.extend(
@@ -913,6 +1044,29 @@ def generate_client_module(
         "  return $sykitDecodeResponse(response);",
         "}",
         "",
+        "async function $sykitPostMultipart(endpoint, values, uploadNames) {",
+        "  const uploads = new $sykitGlobal.Set(uploadNames);",
+        "  const body = new $sykitGlobal.FormData();",
+        "  for (const [name, value] of $sykitGlobal.Object.entries(values)) {",
+        "    if (uploads.has(name)) {",
+        '      if (typeof $sykitGlobal.Blob !== "function" || !(value instanceof $sykitGlobal.Blob)) {',
+        "        throw new $sykitGlobal.TypeError(`SyKit upload parameter ${name} must be a File or Blob.`);",
+        "      }",
+        "      body.append(name, value);",
+        "      continue;",
+        "    }",
+        "    const encoded = $sykitGlobal.JSON.stringify(value);",
+        "    if (encoded === void 0) throw new $sykitGlobal.TypeError(`SyKit parameter ${name} is not JSON serializable.`);",
+        "    body.append(name, encoded);",
+        "  }",
+        "  const response = await $sykitGlobal.fetch($sykitEndpointUrl(endpoint), {",
+        '    method: "POST",',
+        '    credentials: "include",',
+        "    body,",
+        "  });",
+        "  return $sykitDecodeResponse(response);",
+        "}",
+        "",
         "async function $sykitGet(endpoint, values) {",
         "  const query = new $sykitGlobal.URLSearchParams();",
         "  for (const [name, value] of $sykitGlobal.Object.entries(values)) query.set(name, $sykitGlobal.JSON.stringify(value));",
@@ -953,7 +1107,8 @@ def generate_client_module(
                 "  const named = {};",
                 "  (record.p || []).forEach((name, index) => { named[name] = values[index]; });",
                 "  const compact = $sykitCompact(named);",
-                '  return record.m === "GET" ? $sykitGet(record.e, compact) : $sykitPost(record.e, compact);',
+                '  if (record.m === "GET") return $sykitGet(record.e, compact);',
+                "  return record.u?.length ? $sykitPostMultipart(record.e, compact, record.u) : $sykitPost(record.e, compact);",
                 "}",
                 "",
             ]
@@ -979,11 +1134,19 @@ def generate_client_module(
             )
             continue
         values = _js_object_expression(parameters)
-        helper = "$sykitPost" if endpoint.kind == "expose" else "$sykitGet"
+        uploads = [parameter.name for parameter in parameters if parameter.upload]
+        if uploads:
+            call = (
+                f"$sykitPostMultipart({_json_dump(endpoint.endpoint)}, {values}, "
+                f"{_json_dump(uploads)})"
+            )
+        else:
+            helper = "$sykitPost" if endpoint.kind == "expose" else "$sykitGet"
+            call = f"{helper}({_json_dump(endpoint.endpoint)}, {values})"
         lines.extend(
             [
                 f"export async function {endpoint.function}({signature}) {{",
-                f"  return {helper}({_json_dump(endpoint.endpoint)}, {values});",
+                f"  return {call};",
                 "}",
                 "",
             ]

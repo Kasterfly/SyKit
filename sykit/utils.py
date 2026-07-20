@@ -67,8 +67,22 @@ def _route(kind: str, endpoint: str):
     return decorator
 
 
-def expose(endpoint: str):
-    return _route("expose", endpoint)
+def expose(endpoint: str, *, max_upload_bytes: int | None = None):
+    if max_upload_bytes is not None and (
+        isinstance(max_upload_bytes, bool)
+        or not isinstance(max_upload_bytes, int)
+        or max_upload_bytes < 1
+    ):
+        raise ValueError("max_upload_bytes must be a positive integer.")
+    route = _route("expose", endpoint)
+
+    def decorator(function: Function) -> Function:
+        function = route(function)
+        if max_upload_bytes is not None:
+            function = _metadata(function, "max_upload_bytes", max_upload_bytes)
+        return function
+
+    return decorator
 
 
 def raw(endpoint: str):

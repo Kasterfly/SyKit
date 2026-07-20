@@ -78,6 +78,8 @@ Commands operate on the current working directory (your project root).
 
 - [Endpoints](docs/endpoints.md): `@expose`, `@raw`, `@web_hook`, sessions,
   permissions, CORS, rate limits
+- [Uploads](docs/uploads.md): multipart `File`/`Blob` calls, disk-backed
+  temporary files, size limits, validation, and media storage guidance
 - [Login and Access](docs/auth.md): password helpers, `login`/`logout`,
   permission-gated pages, and server-side session stores
 - [API Keys](docs/apikeys.md): `@api_key` web hooks, the `keys` command,
@@ -104,7 +106,7 @@ python tests/smoke_quickstart.py
 
 ## Status
 
-Beta (`0.9.0`)
+Beta (`0.10.0`)
 
 - Expect breaking changes before 1.0.
 - This is a side-project helper, not a production framework. For production

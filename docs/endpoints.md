@@ -7,7 +7,7 @@ them, and generates the `$python` client module for the frontend.
 
 | Decorator | HTTP | Arguments come from | In `$python`? |
 | --- | --- | --- | --- |
-| `@expose(name)` | POST | JSON body | Yes |
+| `@expose(name)` | POST | JSON or multipart body | Yes |
 | `@raw(name)` | GET | Query string | Yes |
 | `@web_hook(name)` | POST | JSON body | No - for external callers |
 
@@ -37,6 +37,10 @@ function (minus the injected ones below). Failed calls throw `SyKitError`
   The client never sends them.
 - Every other parameter comes from the caller. Defaults work; unknown or
   missing arguments are rejected with an error response.
+- A parameter annotated as `Upload` switches that `@expose` endpoint to a
+  multipart request. The generated client accepts a browser `File` or `Blob`
+  for it. Multiple named upload parameters and optional uploads are supported;
+  see [Uploads](uploads.md).
 
 ## Return values
 

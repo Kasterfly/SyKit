@@ -9,15 +9,17 @@ import os
 import re
 import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 from urllib.parse import urlsplit
 
 import uvicorn
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import FormData, MutableHeaders, UploadFile
 from starlette.exceptions import HTTPException
+from starlette.formparsers import MultiPartException, MultiPartParser
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
@@ -45,6 +47,7 @@ from core._sessions import SessionMiddleware, resolve_store  # noqa: E402
 
 from sykit import errors as error_hooks  # noqa: E402
 from sykit import util as session_util  # noqa: E402
+from sykit.uploads import Upload  # noqa: E402
 
 
 class EndpointInputError(ValueError):
@@ -53,6 +56,36 @@ class EndpointInputError(ValueError):
 
 class RequestBodyTooLarge(RuntimeError):
     pass
+
+
+class EndpointUploadTooLarge(RuntimeError):
+    def __init__(self, maximum_bytes: int) -> None:
+        message = (
+            f"Multipart request exceeds this endpoint's "
+            f"{maximum_bytes}-byte upload limit."
+        )
+        super().__init__(message)
+        self.maximum_bytes = maximum_bytes
+
+
+class DiskMultiPartParser(MultiPartParser):
+    spool_max_size = 1
+
+    def on_headers_finished(self) -> None:
+        super().on_headers_finished()
+        if self._current_part.file is not None:
+            temporary = self._current_part.file.file
+            rollover = getattr(temporary, "rollover", None)
+            if rollover is not None:
+                rollover()
+
+    async def parse(self) -> FormData:
+        try:
+            return await super().parse()
+        except BaseException:
+            for temporary in self._files_to_close_on_error:
+                temporary.close()
+            raise
 
 
 def _reject_json_constant(value: str) -> None:
@@ -302,18 +335,106 @@ def _query_values(request: Request) -> dict[str, Any]:
     return values
 
 
+async def _multipart_values(
+    request: Request,
+    metadata: dict[str, Any],
+) -> tuple[dict[str, Any], FormData]:
+    content_type = (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    )
+    if content_type != "multipart/form-data":
+        raise EndpointInputError("Expected a multipart/form-data request body.")
+
+    parameters = [item for item in metadata["parameters"] if not item["injected"]]
+    accepted = {item["name"]: bool(item.get("upload")) for item in parameters}
+    endpoint_limit = metadata.get("max_upload_bytes") or MAX_REQUEST_BYTES
+
+    async def limited_stream() -> AsyncIterator[bytes]:
+        received = 0
+        async for chunk in request.stream():
+            received += len(chunk)
+            if received > endpoint_limit:
+                raise EndpointUploadTooLarge(endpoint_limit)
+            yield chunk
+
+    parser = DiskMultiPartParser(
+        request.headers,
+        limited_stream(),
+        max_files=len(accepted),
+        max_fields=len(accepted),
+        max_part_size=endpoint_limit,
+    )
+    try:
+        form = await parser.parse()
+    except (EndpointUploadTooLarge, RequestBodyTooLarge):
+        raise
+    except MultiPartException as error:
+        raise EndpointInputError(f"Invalid multipart form: {error}") from error
+
+    values: dict[str, Any] = {}
+    try:
+        for name, item in form.multi_items():
+            if name in values:
+                raise EndpointInputError(f"Duplicate multipart parameter {name!r}.")
+            if name not in accepted:
+                values[name] = item
+                continue
+            if accepted[name]:
+                if not isinstance(item, UploadFile):
+                    raise EndpointInputError(
+                        f"Multipart parameter {name!r} must be a file."
+                    )
+                values[name] = Upload(
+                    item.file,
+                    size=item.size or 0,
+                    client_filename=item.filename or "",
+                    client_content_type=item.content_type,
+                )
+                continue
+            if isinstance(item, UploadFile):
+                raise EndpointInputError(
+                    f"Multipart parameter {name!r} must be a JSON field."
+                )
+            try:
+                values[name] = _strict_json_loads(item)
+            except (
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+                ValueError,
+                RecursionError,
+            ) as error:
+                raise EndpointInputError(
+                    f"Multipart parameter {name!r} is not valid JSON."
+                ) from error
+    except BaseException:
+        await form.close()
+        raise
+    return values, form
+
+
+@asynccontextmanager
 async def _provided_values(
-    request: Request, metadata: dict[str, Any]
-) -> dict[str, Any]:
+    request: Request,
+    metadata: dict[str, Any],
+) -> AsyncIterator[dict[str, Any]]:
     kind = metadata["kind"]
     if kind == "raw":
-        return _query_values(request)
+        yield _query_values(request)
+        return
     normal_parameters = [
         item for item in metadata["parameters"] if not item["injected"]
     ]
     if kind == "web_hook" and not normal_parameters:
-        return {}
-    return await _json_body(request)
+        yield {}
+        return
+    if any(item.get("upload") for item in normal_parameters):
+        values, form = await _multipart_values(request, metadata)
+        try:
+            yield values
+        finally:
+            await form.close()
+        return
+    yield await _json_body(request)
 
 
 def _not_found() -> JSONResponse:
@@ -446,35 +567,37 @@ async def _dispatch(request: Request, record: dict[str, Any]) -> Response:
         LOGGER.exception("The shared rate-limit store is unavailable.")
         return _error(503, "Rate limiting is temporarily unavailable.")
     try:
-        provided = await _provided_values(request, metadata)
-        values = _call_values(request, metadata, provided)
-        function = record["function"]
-        try:
-            bound = record["signature"].bind(**values)
-        except TypeError as error:
-            raise EndpointInputError(str(error)) from error
-        bound.apply_defaults()
+        async with _provided_values(request, metadata) as provided:
+            values = _call_values(request, metadata, provided)
+            function = record["function"]
+            try:
+                bound = record["signature"].bind(**values)
+            except TypeError as error:
+                raise EndpointInputError(str(error)) from error
+            bound.apply_defaults()
 
-        session_token = session_util._bind_session(request.session)
-        try:
-            if record["is_async"]:
-                result = await function(*bound.args, **bound.kwargs)
-            else:
-                result = await run_in_threadpool(
-                    function,
-                    *bound.args,
-                    **bound.kwargs,
-                )
-        finally:
-            session_util._reset_session(session_token)
-        if isinstance(result, Response):
-            return result
-        return JSONResponse(result)
+            session_token = session_util._bind_session(request.session)
+            try:
+                if record["is_async"]:
+                    result = await function(*bound.args, **bound.kwargs)
+                else:
+                    result = await run_in_threadpool(
+                        function,
+                        *bound.args,
+                        **bound.kwargs,
+                    )
+            finally:
+                session_util._reset_session(session_token)
+            if isinstance(result, Response):
+                return result
+            return JSONResponse(result)
     except RequestBodyTooLarge:
         return _error(
             413,
             f"Request body exceeds the {MAX_REQUEST_BYTES}-byte limit.",
         )
+    except EndpointUploadTooLarge as error:
+        return _error(413, str(error))
     except EndpointInputError as error:
         return _error(400, str(error))
     except HTTPException as error:
@@ -513,7 +636,7 @@ async def _hidden_manifest(request: Request) -> Response:
             continue
         if not _session_permits(request, metadata):
             continue
-        visible[token] = {
+        entry = {
             "e": metadata["endpoint"],
             "m": metadata["method"],
             "p": [
@@ -522,6 +645,14 @@ async def _hidden_manifest(request: Request) -> Response:
                 if not parameter["injected"]
             ],
         }
+        upload_names = [
+            parameter["name"]
+            for parameter in metadata["parameters"]
+            if parameter.get("upload")
+        ]
+        if upload_names:
+            entry["u"] = upload_names
+        visible[token] = entry
     return JSONResponse(visible)
 
 

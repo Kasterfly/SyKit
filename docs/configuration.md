@@ -9,7 +9,7 @@ defaults below apply when a key is missing.
 | `host-ip` / `host-port` | `"127.0.0.1"` / `8000` | Bind address of the built server |
 | `allowed-hosts` | `127.0.0.1`, `localhost`, `::1` | Host header allowlist |
 | `workers` | `1` | Server worker processes |
-| `max-request-bytes` | `1048576` | Request body size cap |
+| `max-request-bytes` | `1048576` | Global request body cap, including multipart overhead ([upload limits](uploads.md#size-limits)) |
 | `frontend-packages` | `{}` (locked SyKit defaults) | Optional overrides for the pinned Svelte 5, Vite, and Svelte plugin versions |
 | `cache-svelte` | `true` | Keep the npm cache (`__sykitcache__/`) between builds; `false` removes it after each build |
 | `docker` | `false` | Also write `Dockerfile`, `compose.yaml`, and `.dockerignore` into `built/` on every build ([details](deploy.md)) |
