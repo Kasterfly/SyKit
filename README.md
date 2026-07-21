@@ -46,7 +46,7 @@ tool folder, not as an installed library:
 
 ```
 cd your-project
-git clone --branch 0.14.2 --depth 1 https://github.com/Kasterfly/SyKit
+git clone --branch 1.0.0 --depth 1 https://github.com/Kasterfly/SyKit
 python -m pip install --require-hashes -r SyKit/requirements.lock
 
 python SyKit init  # creates src/ with a minimal starter app
@@ -117,8 +117,8 @@ Commands operate on the current working directory (your project root).
 - [Packages](docs/packages.md): reversible add-ons that patch the SyKit tool
   itself, installable from local folders, GitHub repos, or tarball URLs,
   with a pre-install warning report
-- [Compatibility](docs/compatibility.md): the public surfaces and persistent
-  formats being stabilized for 1.0
+- [Compatibility](docs/compatibility.md): the stable 1.0 public surfaces and
+  persistent formats
 
 ## Development
 
@@ -134,10 +134,11 @@ python tests/e2e_quickstart.py  # after: python -m playwright install chromium
 
 ## Status
 
-Beta (`0.14.2`)
+Stable (`1.0.0`)
 
-- The 1.0 compatibility candidate is frozen for the 0.14.x soak. A necessary
-  correction will be released as another 0.14.x patch before 1.0.
+- The 1.0.x line receives compatible security, bug, dependency, runtime, and
+  documentation patches. New framework features and breaking work belong in
+  v2.
 - This is a side-project helper, not a production framework. For production
   setups there are probably far better options.
 

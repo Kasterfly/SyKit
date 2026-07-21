@@ -46,7 +46,8 @@ def main(arguments: list[str] | None = None) -> int:
     if action in {"version", "--version", "-v"}:
         from sykit import __version__
 
-        print(f"SyKit {__version__} (beta)")
+        stage = "stable" if int(__version__.split(".", 1)[0]) >= 1 else "beta"
+        print(f"SyKit {__version__} ({stage})")
         return 0
     if action == "init":
         import init

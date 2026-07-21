@@ -3,9 +3,10 @@
 > **Status:** the built-site findings were addressed in 0.12.2. The package,
 > remote-download, and self-update subsystems were reviewed for 0.13.0, and
 > the fail-open updater finding was fixed. The pre-1.0 runtime and CLI review
-> was completed for 0.14.2 and its actionable findings were patched.
+> was completed for 0.14.2 and its actionable findings were patched. SyKit
+> 1.0.0 declares that reviewed runtime stable without behavior changes.
 
-- **Project:** SyKit 0.14.2 (release-candidate beta)
+- **Project:** SyKit 1.0.0 (stable)
 - **Scope:** `build.py`, the generated runtime under `files/`, the public
   `sykit/` package, `package.py`, `package_remote.py`, `package_analysis.py`,
   and `update.py`.
@@ -13,9 +14,10 @@
   tests, a built-app browser flow through a reverse proxy, and a generated
   container start using locked dependencies.
 - **Result:** no critical or high issue was found in the 0.14.2 assessment.
-  Three medium and eight low runtime and build findings were addressed. The
-  package system's inherent trust model was excluded from this assessment and
-  remains documented below for maintainer review.
+  Three medium and eight low runtime and build findings were addressed before
+  the behavior-identical 1.0.0 declaration. The package system's inherent trust
+  model was excluded from this assessment and remains documented below for
+  maintainer review.
 
 ---
 

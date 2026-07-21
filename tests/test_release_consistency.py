@@ -19,7 +19,8 @@ class ReleaseConsistencyTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         detailed = ROOT / "docs" / "changelogs" / f"update-{version}.md"
-        self.assertIn(f"Beta (`{version}`)", readme)
+        status = "Stable" if int(version.split(".", 1)[0]) >= 1 else "Beta"
+        self.assertIn(f"{status} (`{version}`)", readme)
         self.assertIn(f"--branch {version}", readme)
         self.assertIn(f"## {version} -", changelog)
         self.assertTrue(detailed.is_file())

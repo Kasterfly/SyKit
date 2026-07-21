@@ -1,9 +1,9 @@
-# Frozen 1.0 Compatibility Candidate
+# SyKit 1.0 Compatibility Contract
 
-SyKit 0.14.0 freezes this candidate contract for a patch-only soak before
-1.0. A necessary correction must ship in 0.14.x with migration notes and begin
-a new soak for the changed area. If the soak succeeds, 1.0.0 adopts this
-contract without new runtime behavior.
+SyKit 1.0.0 adopts the contract frozen in 0.14.0 and corrected through 0.14.2.
+The stable declaration adds no runtime behavior. Compatible security, bug,
+dependency, runtime, and documentation corrections may ship in 1.0.x without
+removing or reinterpreting the public surfaces below.
 
 The SyKit 1 stable line is intentionally limited to 1.0.x security, bug,
 dependency, runtime-compatibility, and documentation patches. New framework
@@ -104,7 +104,7 @@ must not edit or consume those files as an API.
 
 ## Supported environments
 
-SyKit 0.14.0 tests Python 3.11, 3.12, 3.13, and 3.14. It accepts and tests LTS
+SyKit 1.0.0 tests Python 3.11, 3.12, 3.13, and 3.14. It accepts and tests LTS
 Node.js 22.12+ and 24.x. Odd, end-of-life, and untested future Node lines are
 rejected.
 

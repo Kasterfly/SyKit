@@ -349,8 +349,8 @@ class BuildSecurityTests(unittest.TestCase):
 
 
 class ReleaseMetadataTests(unittest.TestCase):
-    def test_version_is_0_14_2(self) -> None:
-        self.assertEqual(__version__, "0.14.2")
+    def test_version_is_1_0_0(self) -> None:
+        self.assertEqual(__version__, "1.0.0")
 
 
 if __name__ == "__main__":

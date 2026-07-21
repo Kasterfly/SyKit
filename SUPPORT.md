@@ -5,8 +5,7 @@ or feature issue form for reproducible defects and scoped requests.
 
 Before opening a report:
 
-1. Reproduce on the latest supported 0.14.x release candidate or 1.0.x stable
-   patch.
+1. Reproduce on the latest supported 1.0.x stable patch.
 2. Run `python SyKit version`, the relevant test, and `python -m pip check`.
 3. Include a minimal application or endpoint when possible.
 

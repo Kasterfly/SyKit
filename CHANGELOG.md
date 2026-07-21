@@ -3,6 +3,14 @@
 All notable SyKit changes are listed here. Detailed release notes remain under
 `docs/changelogs/`.
 
+## 1.0.0 - 2026-07-21
+
+- Declared the behavior-tested 0.14.2 compatibility contract stable without
+  changing framework runtime behavior.
+- Finalized stable compatibility, security, support, and release
+  guidance.
+- Set the official compatible SyKit-Packages release line to 1.0.0.
+
 ## 0.14.2 - 2026-07-21
 
 - Prevented anonymous rate-limit traffic from creating server-side session

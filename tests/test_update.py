@@ -134,6 +134,7 @@ class UpdateCommandTests(unittest.TestCase):
         )
 
     def test_packages_are_reapplied_and_failures_reported(self) -> None:
+        status = "Stable" if int(CURRENT.split(".", 1)[0]) >= 1 else "Beta"
         survivor = _make_package(
             self.base,
             "pkg-appender",
@@ -147,8 +148,8 @@ class UpdateCommandTests(unittest.TestCase):
             [
                 {
                     "action": "replace",
-                    "anchor": f"Beta (`{CURRENT}`)",
-                    "content": f"Beta (`{CURRENT}`) B-PATCH",
+                    "anchor": f"{status} (`{CURRENT}`)",
+                    "content": f"{status} (`{CURRENT}`) B-PATCH",
                 }
             ],
         )

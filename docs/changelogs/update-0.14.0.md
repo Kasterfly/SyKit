@@ -38,10 +38,3 @@ patch-only soak before 1.0. It does not add application features.
   below the measured release-hardening baseline.
 - Release guidance requires all supported-runtime, lint, audit, coverage,
   browser, and container checks before a protected release tag.
-
-## Upgrade notes
-
-Read [Migrating from 0.13.1 to 0.14.0](../migration-0.13.1-to-0.14.0.md).
-Existing applications and persisted data need no format conversion. Review the
-new Python and Node floors, and add `sykit-before` to packages intended for a
-bounded major line.
