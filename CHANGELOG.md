@@ -3,6 +3,13 @@
 All notable SyKit changes are listed here. Detailed release notes remain under
 `docs/changelogs/`.
 
+## 0.14.1 - 2026-07-20
+
+- Fixed the unit-test matrix to install the development dependency lock.
+- Kept Starlette's test-client HTTP transport out of production installs.
+- Added a regression check that separates unit-test and container dependency
+  jobs.
+
 ## 0.14.0 - 2026-07-20
 
 - Added an exclusive `sykit-before` package compatibility bound.

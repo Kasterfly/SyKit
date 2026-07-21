@@ -63,11 +63,12 @@ CI tests Node 22.12 and 24 with every documented Python minor from 3.11 through
 ## Backend dependencies
 
 `requirements.in` holds supported runtime ranges. `requirements.lock` pins the
-resolved runtime tree with hashes and is the install source for CI, generated
-apps, and Docker. `requirements-dev.in` and `requirements-dev.lock` do the same
-for development tools, including the HTTP transport used only by Starlette's
-test client. Regenerate locks with pip-tools after changing an input; do not
-hand-edit the generated files.
+resolved runtime tree with hashes and is the install source for generated apps,
+Docker, and runtime-only CI jobs. `requirements-dev.in` and
+`requirements-dev.lock` do the same for unit tests, coverage, browser E2E,
+lint, and other development tools, including the HTTP transport used only by
+Starlette's test client. Regenerate locks with pip-tools after changing an
+input; do not hand-edit the generated files.
 
 ## Reverse proxies
 
