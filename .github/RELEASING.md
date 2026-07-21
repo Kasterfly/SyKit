@@ -16,5 +16,18 @@
    release tag pattern from deletion or movement.
 9. Reinstall from the published tag and run the quick-start once more.
 
+## 0.14.x soak and 1.0.0
+
+- Treat 0.14.x as feature-frozen. A correction ships as a 0.14.x patch and
+  restarts the active soak for the changed area.
+- Require the supported-runtime matrix plus lint, audit, coverage, browser,
+  and container jobs in repository rules before the final 0.14.x rehearsal.
+- Keep release tags protected from update and deletion. Do not bypass a failed
+  required check for a release.
+- Publish 1.0.0 only when the final change from the soaked 0.14.x tree is
+  stable version, status, support, changelog, and release metadata.
+- Run official package compatibility against the exact release tag and record
+  the compatible protected SyKit-Packages release in the release notes.
+
 For release candidates, use `X.Y.Z-rc.N` for the Git tag and release title but
 keep the source version rules documented for that prerelease cycle.

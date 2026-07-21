@@ -11,7 +11,7 @@ class RequirementError(RuntimeError):
     pass
 
 
-NODE_REQUIREMENT = "Node.js 20.19+, 22.12+, or 24+"
+NODE_REQUIREMENT = "Node.js 22.12+ or 24.x"
 
 
 def parse_version(value: str) -> tuple[int, ...]:
@@ -44,9 +44,7 @@ def validate_node_version(value: str) -> tuple[int, int, int]:
     parsed = parse_version(value)
     version = (parsed + (0, 0, 0))[:3]
     major, minor, _patch = version
-    supported = (
-        (major == 20 and minor >= 19) or (major == 22 and minor >= 12) or major >= 24
-    )
+    supported = (major == 22 and minor >= 12) or major == 24
     if not supported:
         raise RequirementError(
             f"SyKit requires {NODE_REQUIREMENT}; found Node.js {value}."

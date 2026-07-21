@@ -181,17 +181,12 @@ def _replace_core(new_root: Path, backup: Path) -> None:
 
 
 def _requirement_failure(manifest: package.Manifest, target_version: str) -> str | None:
-    if not manifest.sykit_req:
+    failure = package._sykit_compatibility_failure(
+        manifest, target_version, "the updated SyKit"
+    )
+    if failure is None:
         return None
-    required = package._parse_version(manifest.sykit_req, f"package '{manifest.id}'")
-    installed = package._parse_version(target_version, "the updated SyKit")
-    if installed < required:
-        return (
-            f"requires SyKit {manifest.sykit_req} or newer; the updated "
-            f"SyKit is {target_version}. Look for a release of the package "
-            "made for this version."
-        )
-    return None
+    return f"{failure}. Look for a release of the package made for this version."
 
 
 def _reapply_from_copies(

@@ -10,7 +10,7 @@ cd SyKit
 python -m pip install --require-hashes -r requirements-dev.lock
 ```
 
-Install Node.js 20.19, 22.12, or 24. The quick-start build installs the exact
+Install Node.js 22.12+ or 24. The quick-start build installs the exact
 frontend tree from `files/frontend-build/package-lock.json`.
 
 ## Checks

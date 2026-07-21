@@ -1,5 +1,6 @@
 -r requirements.in
 coverage[toml]==7.15.2
+httpx2>=2.0.0,<3.0
 pip-audit==2.10.1
 playwright==1.61.0
 ruff==0.15.22

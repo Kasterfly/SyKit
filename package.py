@@ -43,7 +43,16 @@ WINDOWS_DEVICE_NAMES = frozenset(
         *(f"lpt{number}" for number in range(1, 10)),
     }
 )
-MANIFEST_KEYS = {"id", "name", "desc", "package-req", "credit", "sykit-req", "deps"}
+MANIFEST_KEYS = {
+    "id",
+    "name",
+    "desc",
+    "package-req",
+    "credit",
+    "sykit-req",
+    "sykit-before",
+    "deps",
+}
 VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+")
 DEP_MAX_LENGTH = 200
 CHANGE_ACTIONS = {"add", "edit", "remove"}
@@ -190,6 +199,7 @@ class Manifest:
     requires: tuple[str, ...]
     credit: tuple[str, ...]
     sykit_req: str
+    sykit_before: str
     deps: tuple[str, ...]
 
 
@@ -286,6 +296,22 @@ def _load_manifest(package_dir: Path) -> Manifest:
         )
     if sykit_req:
         _parse_version(sykit_req, f'{manifest_path}: "sykit-req"')
+    sykit_before = value.get("sykit-before", "")
+    if not isinstance(sykit_before, str):
+        raise PackageError(
+            f'{manifest_path}: "sykit-before" must be a version string like "2.0.0".'
+        )
+    if sykit_before:
+        _parse_version(sykit_before, f'{manifest_path}: "sykit-before"')
+    if (
+        sykit_req
+        and sykit_before
+        and _parse_version(sykit_req, f'{manifest_path}: "sykit-req"')
+        >= _parse_version(sykit_before, f'{manifest_path}: "sykit-before"')
+    ):
+        raise PackageError(
+            f'{manifest_path}: "sykit-req" must be earlier than "sykit-before".'
+        )
     deps = value.get("deps", [])
     if isinstance(deps, str):
         deps = [deps]
@@ -318,6 +344,7 @@ def _load_manifest(package_dir: Path) -> Manifest:
         tuple(requires),
         tuple(entry.strip() for entry in credit),
         sykit_req,
+        sykit_before,
         tuple(deps),
     )
 
@@ -339,16 +366,41 @@ def _current_sykit_version() -> str:
     return __version__
 
 
+def _sykit_compatibility_failure(
+    manifest: Manifest, version: str, subject: str
+) -> str | None:
+    if not manifest.sykit_req and not manifest.sykit_before:
+        return None
+    installed = _parse_version(version, subject)
+    if manifest.sykit_req:
+        required = _parse_version(
+            manifest.sykit_req, f"package '{manifest.id}' minimum"
+        )
+        if installed < required:
+            return (
+                f"requires SyKit {manifest.sykit_req} or newer; {subject} is {version}"
+            )
+    if manifest.sykit_before:
+        before = _parse_version(
+            manifest.sykit_before, f"package '{manifest.id}' upper bound"
+        )
+        if installed >= before:
+            return (
+                f"supports SyKit versions before {manifest.sykit_before}; "
+                f"{subject} is {version}"
+            )
+    return None
+
+
 def _check_sykit_requirement(manifest: Manifest) -> None:
-    if not manifest.sykit_req:
+    if not manifest.sykit_req and not manifest.sykit_before:
         return
     current = _current_sykit_version()
-    required = _parse_version(manifest.sykit_req, f"package '{manifest.id}'")
-    installed = _parse_version(current, "sykit/__init__.py")
-    if installed < required:
+    failure = _sykit_compatibility_failure(manifest, current, "this SyKit")
+    if failure is not None:
         raise PackageError(
-            f"Package '{manifest.id}' requires SyKit {manifest.sykit_req} or "
-            f"newer; this SyKit is {current}. Update SyKit first."
+            f"Package '{manifest.id}' {failure}. Use a compatible package or "
+            "SyKit version."
         )
 
 
@@ -732,6 +784,21 @@ def _load_record(package_id: str) -> dict[str, Any]:
         if len({entry.casefold() for entry in requirements}) != len(requirements):
             raise corrupt
 
+        sykit_req = value.get("sykit-req", "")
+        sykit_before = value.get("sykit-before", "")
+        if not isinstance(sykit_req, str) or not isinstance(sykit_before, str):
+            raise corrupt
+        if sykit_req:
+            required = _parse_version(sykit_req, str(path))
+        else:
+            required = None
+        if sykit_before:
+            before = _parse_version(sykit_before, str(path))
+        else:
+            before = None
+        if required is not None and before is not None and required >= before:
+            raise corrupt
+
         change_paths: set[str] = set()
         for change in value["changes"]:
             if (
@@ -755,6 +822,8 @@ def _load_record(package_id: str) -> dict[str, Any]:
         if error is corrupt:
             raise
         raise corrupt from error
+    value.setdefault("sykit-req", "")
+    value.setdefault("sykit-before", "")
     return value
 
 
@@ -806,6 +875,7 @@ def _apply_package(
         "package-req": list(manifest.requires),
         "credit": list(manifest.credit),
         "sykit-req": manifest.sykit_req,
+        "sykit-before": manifest.sykit_before,
         "deps": list(manifest.deps),
         "source": source,
         "installed": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -977,6 +1047,8 @@ def _report_lines(
         lines.append(f"  {manifest.desc}")
     if manifest.sykit_req:
         lines.append(f"Requires SyKit {manifest.sykit_req} or newer.")
+    if manifest.sykit_before:
+        lines.append(f"Supports SyKit versions before {manifest.sykit_before}.")
     source_line = f"Source: {source.get('spec', '')}"
     extras = []
     if source.get("ref_type"):
@@ -1288,6 +1360,12 @@ def _command_list() -> None:
         print(f"       source: {_sanitize_text(_source_label(record))}")
         if record["package-req"]:
             print(f"       requires: {', '.join(record['package-req'])}")
+        sykit_req = record.get("sykit-req")
+        sykit_before = record.get("sykit-before")
+        if sykit_req or sykit_before:
+            minimum = sykit_req or "any"
+            maximum = f"before {sykit_before}" if sykit_before else "no maximum"
+            print(f"       SyKit: {minimum} or newer, {maximum}")
         deps = record.get("deps")
         if isinstance(deps, list) and deps:
             joined = ", ".join(str(entry) for entry in deps)

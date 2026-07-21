@@ -2,14 +2,18 @@
 
 ## Supported versions
 
-SyKit is a beta. Security fixes are provided for the latest 0.13.x release.
+SyKit 0.14.x is the patch-only release-candidate line. Security fixes are
+provided for its latest patch while the 1.0 compatibility candidate soaks.
 Older beta lines should update before reporting behavior that is already fixed.
-The support window will be revised before 1.0.
+
+After 1.0.0, the latest 1.0.x patch receives best-effort security fixes while
+the stable line remains supported. Any end-of-support date will be announced in
+advance; no response or fix-time SLA is offered.
 
 | Version | Security fixes |
 | --- | --- |
-| 0.13.x | Yes |
-| 0.12.x and older | No |
+| 0.14.x | Yes |
+| 0.13.x and older | No |
 
 ## Private reports
 

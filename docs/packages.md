@@ -133,11 +133,11 @@ python SyKit update [source] [--yes] [--allow-unreleased]
 It removes every installed package (removal restores the original files
 exactly), replaces the core files with the fetched release, then
 reapplies the stored copies of the packages in their original order and
-reports exactly which ones no longer fit: a package whose `sykit-req`
-exceeds the new version is refused with a message naming both versions,
-and a package whose edits no longer anchor fails cleanly and stays
-uninstalled; look for a newer release of that package and
-`package add` it again.
+reports exactly which ones no longer fit: a package whose inclusive
+`sykit-req` minimum exceeds the new version, or whose exclusive
+`sykit-before` maximum has been reached, is refused with a message naming both
+versions. A package whose edits no longer anchor also fails cleanly and stays
+uninstalled; look for a newer release and `package add` it again.
 
 Details:
 
@@ -214,7 +214,8 @@ internal repo with the `package-default-repo` setting.
     "id": "my-package",
     "name": "My Package",
     "desc": "What it does.",
-    "sykit-req": "0.4.1",
+    "sykit-req": "0.14.0",
+    "sykit-before": "2.0.0",
     "deps": ["some-dependency>=1.0,<2"],
     "package-req": ["some-other-id"],
     "credit": ["John Doe (https://example.com)"]
@@ -233,6 +234,11 @@ internal repo with the `package-default-repo` setting.
      needs, as `"X.Y.Z"`. Installing on an older SyKit fails up front
      with a clear message. Handlers before 0.4.1 reject manifests that
      use this key.
+   - `sykit-before` **optional**, the exclusive upper SyKit version bound as
+     `"X.Y.Z"`. A value of `"2.0.0"` supports versions before 2.0.0 and
+     refuses 2.0.0 or newer before any mutation. It must be later than
+     `sykit-req` when both are present. Handlers before 0.14.0 reject this key.
+     Packages intended for the stable SyKit 1 line should use `"2.0.0"`.
    - `deps` **optional**, a string or list of pip requirement strings the
      package's code needs at runtime (for example `"boto3>=1.34,<2"`).
      SyKit never installs dependencies: they are flagged in the

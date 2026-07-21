@@ -13,7 +13,7 @@ import package_analysis
 
 
 class ManifestValidationTests(unittest.TestCase):
-    """Parsing and validation of the sykit-req and deps manifest keys."""
+    """Parsing and validation of compatibility and dependency manifest keys."""
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="sykit-manifest-test-")
@@ -35,14 +35,20 @@ class ManifestValidationTests(unittest.TestCase):
 
     def test_new_keys_parse(self) -> None:
         manifest = self.load(
-            {"sykit-req": "0.4.1", "deps": ["boto3>=1.34,<2", "requests"]}
+            {
+                "sykit-req": "0.4.1",
+                "sykit-before": "2.0.0",
+                "deps": ["boto3>=1.34,<2", "requests"],
+            }
         )
         self.assertEqual(manifest.sykit_req, "0.4.1")
+        self.assertEqual(manifest.sykit_before, "2.0.0")
         self.assertEqual(manifest.deps, ("boto3>=1.34,<2", "requests"))
 
     def test_absent_keys_default_empty(self) -> None:
         manifest = self.load({})
         self.assertEqual(manifest.sykit_req, "")
+        self.assertEqual(manifest.sykit_before, "")
         self.assertEqual(manifest.deps, ())
 
     def test_deps_accepts_a_single_string(self) -> None:
@@ -54,6 +60,18 @@ class ManifestValidationTests(unittest.TestCase):
             with self.subTest(bad=bad):
                 with self.assertRaises(package.PackageError):
                     self.load({"sykit-req": bad})
+
+    def test_invalid_sykit_before_is_rejected(self) -> None:
+        for bad in ("1.2", "v2.0.0", "2.0.0.0", 200, [2, 0, 0]):
+            with self.subTest(bad=bad):
+                with self.assertRaises(package.PackageError):
+                    self.load({"sykit-before": bad})
+
+    def test_empty_compatibility_range_is_rejected(self) -> None:
+        for required, before in (("2.0.0", "2.0.0"), ("3.0.0", "2.0.0")):
+            with self.subTest(required=required, before=before):
+                with self.assertRaisesRegex(package.PackageError, "must be earlier"):
+                    self.load({"sykit-req": required, "sykit-before": before})
 
     def test_invalid_deps_are_rejected(self) -> None:
         for bad in (
@@ -163,6 +181,57 @@ class RequirementGateTests(ToolTreeCase):
         self.assertEqual(package._load_index(), [])
         self.assertFalse(package.PACKAGES_DIR.exists())
 
+    def test_future_upper_bound_installs_and_is_recorded(self) -> None:
+        source = self.make_package(
+            "bounded",
+            "bounded",
+            manifest_extra={"sykit-req": "0.0.1", "sykit-before": "999.0.0"},
+        )
+        self.assertTrue(self.add(source))
+        self.assertIn("Supports SyKit versions before 999.0.0.", self.output)
+        record = package._load_record("bounded")
+        self.assertEqual(record["sykit-before"], "999.0.0")
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            package._command_list()
+        self.assertIn("SyKit: 0.0.1 or newer, before 999.0.0", output.getvalue())
+
+    def test_equal_upper_bound_refuses_before_prompt(self) -> None:
+        current = package._current_sykit_version()
+        source = self.make_package(
+            "equal-max",
+            "equal-max",
+            manifest_extra={"sykit-before": current},
+        )
+        with mock.patch("builtins.input", side_effect=AssertionError):
+            with self.assertRaisesRegex(
+                package.PackageError, f"supports SyKit versions before {current}"
+            ):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    package._command_add(str(source))
+        self.assertFalse((self.tool / "equal-max.txt").exists())
+        self.assertEqual(package._load_index(), [])
+
+    def test_past_upper_bound_refuses(self) -> None:
+        source = self.make_package(
+            "past-max",
+            "past-max",
+            manifest_extra={"sykit-before": "0.0.1"},
+        )
+        with self.assertRaisesRegex(
+            package.PackageError, "supports SyKit versions before 0.0.1"
+        ):
+            with contextlib.redirect_stdout(io.StringIO()):
+                package._command_add(str(source), assume_yes=True)
+
+    def test_legacy_record_defaults_upper_bound(self) -> None:
+        source = self.make_package("legacy-record", "legacy-record")
+        self.assertTrue(self.add(source))
+        record_path = package.PACKAGES_DIR / "legacy-record" / package.RECORD_NAME
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        record.pop("sykit-before")
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+        self.assertEqual(package._load_record("legacy-record")["sykit-before"], "")
+
 
 class DepsFlowTests(ToolTreeCase):
     def test_report_record_and_install_note(self) -> None:
@@ -180,6 +249,7 @@ class DepsFlowTests(ToolTreeCase):
         )
         self.assertEqual(record["deps"], ["boto3>=1.34,<2"])
         self.assertEqual(record["sykit-req"], "")
+        self.assertEqual(record["sykit-before"], "")
 
     def test_list_shows_deps(self) -> None:
         source = self.make_package(

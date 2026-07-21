@@ -2,9 +2,10 @@
 
 > **Status:** the built-site findings were addressed in 0.12.2. The package,
 > remote-download, and self-update subsystems were reviewed for 0.13.0, and
-> the fail-open updater finding was fixed.
+> the fail-open updater finding was fixed. SyKit 0.14.0 freezes the reviewed
+> compatibility and security behavior for its pre-1.0 soak.
 
-- **Project:** SyKit 0.13.0 (beta)
+- **Project:** SyKit 0.14.0 (release-candidate beta)
 - **Scope:** `build.py`, the generated runtime under `files/`, the public
   `sykit/` package, `package.py`, `package_remote.py`, `package_analysis.py`,
   and `update.py`.
@@ -53,9 +54,12 @@ Residual trust model:
   repository controls outside this source tree. The release checklist requires
   them before 1.0.
 
-## Historical built-site findings
+## Historical built-site findings resolved in 0.12.2
 
-### 1. Medium - Hidden endpoints are enumerable with non-standard HTTP methods (verified)
+The following descriptions preserve the original pre-fix evidence. They are
+not open findings and their recommendations were implemented in 0.12.2.
+
+### 1. Resolved medium - Hidden endpoints were enumerable with non-standard methods
 
 **Where:** `files/server.py:286-297` (`API_CATCHALL_METHODS`), routes built at `files/server.py:884-905`.
 
@@ -84,7 +88,7 @@ Add a probe test mirroring `test_security_hardening.py`'s hidden-endpoint loop b
 
 ---
 
-### 2. Low-Medium - Same-origin browser POSTs get 403 behind a TLS-terminating proxy with the default launcher
+### 2. Resolved low-medium - Proxy scheme handling rejected same-origin POSTs
 
 **Where:** `files/server.py:990-1002` (`_same_origin`), `files/server.py:1494` (`proxy_headers=False`), docs gap at `docs/configuration.md` ("Reverse proxies").
 
@@ -101,7 +105,7 @@ The origin check compares the request's `Origin` tuple `(scheme, host, port)` ag
 
 ---
 
-### 3. Low - Failed API-key and permission checks bypass rate limiting (verified)
+### 3. Resolved low - Failed authentication bypassed configured rate limiting
 
 **Where:** `files/server.py:688-702` - `_check_permissions` and `_check_api_key` both run and return before `LIMITER.check`.
 
@@ -214,7 +218,9 @@ These were specifically probed or audited and held up:
 2. `"session-store": "sqlite"` (or a packaged store) so logout revokes.
 3. Exact `"allowed-hosts"` for your domain; keep `"host-ip": "127.0.0.1"` behind the proxy.
 4. Launch with the documented `uvicorn --proxy-headers --forwarded-allow-ips=<proxy>` (fixes both client-IP rate limits and the same-origin CORS check from finding 2).
-5. `@limits({"per-client": "..."})` on login and any unauthenticated endpoint; a proxy-level limit in front of `@web_hook` endpoints until finding 3 is addressed.
+5. `@limits({"per-client": "..."})` on login and unauthenticated endpoints;
+   use a proxy-level limit as an additional outer control where appropriate.
 6. Set a baseline `"content-security-policy"` (start with `default-src 'self'` and relax as needed).
 7. Leave `readiness-path` disabled on public deployments, or restrict it at the proxy.
-8. Fix finding 1 before relying on `@hidden` for anything beyond obscurity.
+8. Treat `@hidden` as concealment, not authorization; keep its required
+   permission check meaningful.

@@ -79,11 +79,14 @@ def _make_package(
     target: str,
     operations: list[dict[str, str]],
     sykit_req: str = "",
+    sykit_before: str = "",
 ) -> Path:
     folder = base / package_id
     manifest: dict[str, object] = {"id": package_id}
     if sykit_req:
         manifest["sykit-req"] = sykit_req
+    if sykit_before:
+        manifest["sykit-before"] = sykit_before
     folder.mkdir(parents=True)
     (folder / "SyKitPackage.json").write_text(json.dumps(manifest), encoding="utf-8")
     payload = folder / "edit" / Path(target)
@@ -194,6 +197,28 @@ class UpdateCommandTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertNotIn("NEEDY-MARKER", endpoints_doc)
+
+    def test_upgrade_refuses_package_at_exclusive_upper_bound(self) -> None:
+        bounded = _make_package(
+            self.base,
+            "pkg-bounded",
+            "docs/endpoints.md",
+            [{"action": "append", "content": "\nBOUNDED-MARKER\n"}],
+            sykit_before=self.newer,
+        )
+        added = _run_tool(self.tool, "package", "add", str(bounded), "--yes")
+        self.assertEqual(added.returncode, 0, added.stdout + added.stderr)
+
+        core = _make_core(self.base, "new-core", self.newer)
+        result = _run_tool(self.tool, "update", str(core), "--yes")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("FAILED: pkg-bounded", result.stdout)
+        self.assertIn(f"supports SyKit versions before {self.newer}", result.stdout)
+        self.assertEqual(_version_of(self.tool), self.newer)
+        endpoints_doc = (self.tool / "docs" / "endpoints.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("BOUNDED-MARKER", endpoints_doc)
 
     def test_up_to_date_stops_early(self) -> None:
         core = _make_core(self.base, "same-core", CURRENT)

@@ -3,6 +3,16 @@
 All notable SyKit changes are listed here. Detailed release notes remain under
 `docs/changelogs/`.
 
+## 0.14.0 - 2026-07-20
+
+- Added an exclusive `sykit-before` package compatibility bound.
+- Froze the candidate 1.0 API, CLI, package, generated-layout, and data
+  contracts for the 0.14.x soak.
+- Moved the supported floor to Python 3.11 and LTS Node 22/24.
+- Removed the test-client HTTP transport from runtime dependencies.
+- Raised the branch coverage floor to the measured 64 percent baseline.
+- Added beta-to-release-candidate migration, support, and release guidance.
+
 ## 0.13.1 - 2026-07-20
 
 - Fixed the container CI job to invoke SyKit from the checkout root.

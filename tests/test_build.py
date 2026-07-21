@@ -32,12 +32,19 @@ def endpoint(name: str, *, kind: str = "expose") -> build.EndpointInfo:
 
 class NodeRequirementTests(unittest.TestCase):
     def test_supported_node_versions(self) -> None:
-        for version in ("v20.19.0", "22.12.0", "v24.0.0", "26.1.2"):
+        for version in ("22.12.0", "v22.20.1", "v24.0.0", "24.9.1"):
             with self.subTest(version=version):
                 validate_node_version(version)
 
     def test_unsupported_node_versions(self) -> None:
-        for version in ("18.20.0", "20.18.9", "21.7.3", "22.11.0", "23.9.0"):
+        for version in (
+            "20.20.2",
+            "21.7.3",
+            "22.11.0",
+            "23.9.0",
+            "25.3.0",
+            "26.1.2",
+        ):
             with self.subTest(version=version):
                 with self.assertRaises(RequirementError):
                     validate_node_version(version)
@@ -48,14 +55,27 @@ class FrontendManifestTests(unittest.TestCase):
         manifest, dependencies = build._load_frontend_manifest()
         lock = json.loads(build.FRONTEND_LOCK_PATH.read_text(encoding="utf-8"))
         self.assertEqual(manifest["dependencies"], dependencies)
+        self.assertEqual(manifest["engines"]["node"], "^22.12.0 || ^24.0.0")
         self.assertEqual(lock["lockfileVersion"], 3)
         self.assertEqual(lock["packages"][""]["dependencies"], dependencies)
+        self.assertEqual(
+            lock["packages"][""]["engines"]["node"],
+            manifest["engines"]["node"],
+        )
         self.assertTrue(
             all(
                 build.PINNED_NPM_VERSION.fullmatch(value)
                 for value in dependencies.values()
             )
         )
+
+
+class DependencyScopeTests(unittest.TestCase):
+    def test_test_client_transport_is_development_only(self) -> None:
+        runtime = (ROOT / "requirements.in").read_text(encoding="utf-8")
+        development = (ROOT / "requirements-dev.in").read_text(encoding="utf-8")
+        self.assertNotIn("httpx2", runtime)
+        self.assertIn("httpx2>=2.0.0,<3.0", development)
 
 
 class ConfigurationContractTests(unittest.TestCase):

@@ -32,8 +32,8 @@ def ping(session: dict):
 ```
 ## Requirements
 
-- Python 3.10 through 3.14
-- Node.js 20.19+, 22.12+, or 24+ on your PATH
+- Python 3.11 through 3.14
+- Node.js 22.12+ or 24.x on your PATH
 - npm (included with standard Node.js installations)
 
 Frontend and backend dependencies are pinned in checked-in lockfiles. The
@@ -46,7 +46,7 @@ tool folder, not as an installed library:
 
 ```
 cd your-project
-git clone --branch 0.13.1 --depth 1 https://github.com/Kasterfly/SyKit
+git clone --branch 0.14.0 --depth 1 https://github.com/Kasterfly/SyKit
 python -m pip install --require-hashes -r SyKit/requirements.lock
 
 python SyKit init  # creates src/ with a minimal starter app
@@ -134,9 +134,10 @@ python tests/e2e_quickstart.py  # after: python -m playwright install chromium
 
 ## Status
 
-Beta (`0.13.1`)
+Beta (`0.14.0`)
 
-- Expect breaking changes before 1.0.
+- The 1.0 compatibility candidate is frozen for the 0.14.x soak. A necessary
+  correction will be released as another 0.14.x patch before 1.0.
 - This is a side-project helper, not a production framework. For production
   setups there are probably far better options.
 

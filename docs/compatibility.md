@@ -1,8 +1,13 @@
-# Compatibility Contract
+# Frozen 1.0 Compatibility Candidate
 
-SyKit 0.13.0 is still a beta. Breaking changes may occur before 1.0, but they
-must be called out in the changelog and migration guide. The following list is
-the candidate semantic-versioning contract for the 1.0 release candidate.
+SyKit 0.14.0 freezes this candidate contract for a patch-only soak before
+1.0. A necessary correction must ship in 0.14.x with migration notes and begin
+a new soak for the changed area. If the soak succeeds, 1.0.0 adopts this
+contract without new runtime behavior.
+
+The SyKit 1 stable line is intentionally limited to 1.0.x security, bug,
+dependency, runtime-compatibility, and documentation patches. New framework
+features and breaking work belong to v2.
 
 ## Python API
 
@@ -16,17 +21,18 @@ The public Python API is the names in `sykit.__all__`:
 - `register_error_hook`
 - `util` and `__version__`
 
-The documented `sykit.auth` helpers and the documented attributes and methods
-of `Upload` are also candidate public API. Underscore-prefixed names are
-internal. A 1.x minor release may add optional arguments and exports, but may
-not remove or reinterpret existing ones.
+The documented `sykit.auth` helpers, `sykit.auth.AuthError`, and the documented
+attributes and methods of `Upload` are also public. Underscore-prefixed names
+and generated `files/core` modules are internal. A 1.0.x release may not remove,
+rename, or reinterpret public names, arguments, return behavior, or documented
+exceptions.
 
 ## Generated browser API
 
 The generated `$python` module exports one function for every client-visible
 `@expose`, `@raw`, and `@sse` top-level function. It also exports `SyKitError`.
 `SyKitError.name`, `status`, `payload`, and the generic network status `0` are
-candidate public behavior. Hidden endpoint paths and manifest tokens are not
+public behavior. Hidden endpoint paths and manifest tokens are not
 public and may change without notice.
 
 ## Static endpoint discovery
@@ -37,21 +43,45 @@ Discovery currently recognizes the exact decorator names `expose`, `raw`,
 and endpoints and tasks must be top-level functions. The accepted signatures,
 injected `session` and `request` names, `Upload` annotation, and build-time
 rejections documented in `endpoints.md`, `uploads.md`, and `streaming.md` are
-part of the candidate contract.
+part of the public contract.
+
+## Command line
+
+The documented `init`, `build`, `keys`, `package`, `update`, `version`, and
+`help` commands and options are public. Successful commands return status 0;
+validation, safety refusal, and runtime failures return a nonzero status. Exact
+console wording, whitespace, progress output, and internal helper functions are
+not public API.
+
+## Generated application layout
+
+`init` creates the documented source starter and `src/sykit/config.json`.
+`build` produces a runnable `built/main.py`, the generated server and core
+modules it needs, and compiled static assets under `built/static`. Docker mode
+also produces the documented Dockerfile, Compose file, and dockerignore.
+
+Those entry points and configuration locations are public. Hashed asset names,
+generated core module names, implementation code, temporary build folders, and
+cache layout are internal and may change in a 1.0.x fix.
 
 ## Configuration
 
 The keys listed in `configuration.md` are accepted. Unknown top-level keys are
 rejected so misspellings cannot silently select a default. Third-party config
 must live under the `extensions` object, with a package-owned child name.
-Adding a new optional key is compatible; removing a key or changing its type or
-security meaning requires a major release after 1.0.
+The 1.0.x line may correct validation defects but does not add application
+features. Removing a key or changing its type or security meaning requires v2.
 
 ## Packages
 
 `SyKitPackage.json` accepts `id`, `name`, `desc`, `package-req`, `credit`,
-`sykit-req`, and `deps`. The `add`, `edit`, and `remove` layout and the edit
-actions documented in `packages.md` are the candidate package format.
+`sykit-req`, `sykit-before`, and `deps`. `sykit-req` is an inclusive minimum;
+`sykit-before` is an exclusive maximum. The `add`, `edit`, and `remove` layout
+and the edit actions documented in `packages.md` are the public package format.
+
+The 1.0.x line may fix package transactions and record migration, but it will
+not reinterpret existing manifest keys or edit actions. Packages for the 1.x
+major should declare an upper bound before `2.0.0`.
 
 Installed records under `.packages` are internal recovery state. SyKit will
 migrate records it created within the supported major line, but applications
@@ -60,7 +90,7 @@ must not edit or consume those files as an API.
 ## Persistent data
 
 - Signed session cookies use the documented `sykit_session` cookie. Cookie
-  bytes are an implementation detail, but compatible 1.x releases must keep
+  bytes are an implementation detail, but compatible 1.0.x releases must keep
   valid cookies readable or document forced logout as a security migration.
 - Password hashes returned by `auth.hash_password` start with `scrypt$` and
   remain verifiable by later compatible releases.
@@ -74,7 +104,13 @@ must not edit or consume those files as an API.
 
 ## Supported environments
 
-SyKit 0.13.0 tests Python 3.10, 3.11, 3.12, 3.13, and 3.14. It tests Node.js
-20.19, 22.12, and 24. Support for an environment means the locked install,
-unit suite, and quick-start build pass in CI. Removal of an environment from a
-stable major line requires advance notice in the support policy.
+SyKit 0.14.0 tests Python 3.11, 3.12, 3.13, and 3.14. It accepts and tests LTS
+Node.js 22.12+ and 24.x. Odd, end-of-life, and untested future Node lines are
+rejected.
+
+Linux runs the full unit, quick-start, browser, and generated-container gates.
+Windows runs the supported-version unit and quick-start gates. macOS is best
+effort and is not in the release matrix. Support for an environment means its
+documented CI gates pass with the locked dependencies. Adding a tested runtime
+is compatible; removal from the stable line requires advance notice in the
+support policy.

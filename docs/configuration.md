@@ -55,17 +55,19 @@ SyKit's default frontend manifest and lockfile live in
 gets the same dependency tree. Setting an entry in `frontend-packages` opts
 that project into a custom npm resolution and a cache-local lockfile.
 
-Supported Node.js versions are 20.19+, 22.12+, and 24+. SyKit checks this
-before installing frontend dependencies. CI explicitly tests Node 22.12 and
-every documented Python minor from 3.10 through 3.14.
+Supported Node.js versions are LTS 22.12+ and 24.x. SyKit rejects end-of-life,
+odd, and untested future Node lines before installing frontend dependencies.
+CI tests Node 22.12 and 24 with every documented Python minor from 3.11 through
+3.14.
 
 ## Backend dependencies
 
 `requirements.in` holds supported runtime ranges. `requirements.lock` pins the
 resolved runtime tree with hashes and is the install source for CI, generated
 apps, and Docker. `requirements-dev.in` and `requirements-dev.lock` do the same
-for development tools. Regenerate locks with pip-tools after changing an input;
-do not hand-edit the generated files.
+for development tools, including the HTTP transport used only by Starlette's
+test client. Regenerate locks with pip-tools after changing an input; do not
+hand-edit the generated files.
 
 ## Reverse proxies
 
