@@ -40,6 +40,7 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 SALT_BYTES = 16
 KEY_BYTES = 32
+MAX_VERIFY_KEY_BYTES = 64
 MAX_PASSWORD_BYTES = 1024
 _SCRYPT_MAXMEM = 128 * 1024 * 1024
 _ROTATE_KEY = _INTERNAL_PREFIX + "rotate"
@@ -105,20 +106,27 @@ def verify_password(password: str, stored: str) -> bool:
         or not 1 <= parallelism <= 16
         or not salt
         or not expected
+        or len(expected) > MAX_VERIFY_KEY_BYTES
+        or 128 * cost * block_size > _SCRYPT_MAXMEM
     ):
         raise AuthError("stored value has out-of-range scrypt parameters.")
     raw = _password_bytes(password)
     if raw is None:
         return False
-    key = hashlib.scrypt(
-        raw,
-        salt=salt,
-        n=cost,
-        r=block_size,
-        p=parallelism,
-        maxmem=_SCRYPT_MAXMEM,
-        dklen=len(expected),
-    )
+    try:
+        key = hashlib.scrypt(
+            raw,
+            salt=salt,
+            n=cost,
+            r=block_size,
+            p=parallelism,
+            maxmem=_SCRYPT_MAXMEM,
+            dklen=len(expected),
+        )
+    except ValueError as error:
+        raise AuthError(
+            f"stored value has invalid scrypt parameters: {error}"
+        ) from error
     return hmac.compare_digest(key, expected)
 
 
@@ -144,8 +152,12 @@ def login(claims: dict[str, Any]) -> None:
                 f"claim {key!r} is not JSON-serializable: {error}"
             ) from error
     session = _session()
+    rate_id_key = _INTERNAL_PREFIX + "rate_id"
+    rate_id = session.get(rate_id_key)
     session.clear()
     session.update(claims)
+    if isinstance(rate_id, str) and rate_id:
+        session[rate_id_key] = rate_id
     session[_ROTATE_KEY] = True
 
 

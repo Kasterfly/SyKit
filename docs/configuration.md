@@ -11,6 +11,7 @@ build instead of silently selecting a default.
 | `allowed-hosts` | `127.0.0.1`, `localhost`, `::1` | Host header allowlist |
 | `workers` | `1` | Server worker processes |
 | `task-concurrency` | `1` | Background calls that may run concurrently in each server process ([details](background-tasks.md#enqueue-work)) |
+| `task-max-attempts` | `3` | Maximum claims before a repeatedly recovered task is marked failed ([details](background-tasks.md#delivery-and-failures)) |
 | `sse-heartbeat-seconds` | `15` | Seconds between SSE keepalive comments while an event is pending; positive integer ([details](streaming.md#lifecycle-and-errors)) |
 | `max-request-bytes` | `1048576` | Global request body cap, including multipart overhead ([upload limits](uploads.md#size-limits)) |
 | `frontend-packages` | `{}` (locked SyKit defaults) | Optional overrides for the pinned Svelte 5, Vite, and Svelte plugin versions |
@@ -47,6 +48,9 @@ adds `.env` to the project `.gitignore`, and uses owner-only permissions on
 POSIX. On Windows the file keeps the directory's ACL instead, so review who
 can read it on shared machines. `build --dev` generates a temporary secret
 when neither provides one.
+
+Every successful build also adds `built/` and `__sykitcache__/` to the
+project `.gitignore` when equivalent entries are not already present.
 
 ## Frontend toolchain
 

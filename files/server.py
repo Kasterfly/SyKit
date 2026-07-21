@@ -63,6 +63,7 @@ CONFIG_KEYS = frozenset(
         "sse-heartbeat-seconds",
         "sykit-folder-path",
         "task-concurrency",
+        "task-max-attempts",
         "task-store",
         "trust-proxy",
         "update-repo",
@@ -601,12 +602,12 @@ def _session_permits(request: Request, metadata: dict[str, Any]) -> bool:
     return _session_satisfies(request, required_session)
 
 
-def _page_allowed(request: Request, candidate: Path) -> bool:
+def _page_requirements(candidate: Path) -> tuple[dict[str, Any], ...]:
     if not PAGE_PERMS:
-        return True
+        return ()
     relative = "/" + candidate.relative_to(STATIC_ROOT).as_posix().casefold()
-    return all(
-        _session_satisfies(request, required)
+    return tuple(
+        required
         for prefix, required in PAGE_PERMS
         if relative == prefix or relative.startswith(prefix + "/")
     )
@@ -722,7 +723,10 @@ async def _check_api_key(
     requirement = metadata.get("api_key")
     if not requirement:
         return None
-    key_value = request.headers.get(KEY_HEADER, "").strip()
+    key_values = request.headers.getlist(KEY_HEADER)
+    if len(key_values) > 1:
+        return _error(400, f"{KEY_HEADER} must not be repeated.")
+    key_value = key_values[0].strip() if key_values else ""
     if not key_value:
         return _error(401, "A valid API key is required.")
     try:
@@ -944,11 +948,12 @@ async def _spa(request: Request) -> Response:
         # exist, so a failed check serves the same SPA fallback. The match
         # runs on the resolved path so case or short-name aliases cannot
         # slip past the prefix.
-        if not _page_allowed(request, candidate):
+        requirements = _page_requirements(candidate)
+        if not all(_session_satisfies(request, required) for required in requirements):
             return _spa_fallback()
         cache_control = (
             "public, max-age=31536000, immutable"
-            if requested.startswith("assets/")
+            if requested.startswith("assets/") and not requirements
             else "no-cache"
         )
         return FileResponse(candidate, headers={"Cache-Control": cache_control})
@@ -1138,12 +1143,13 @@ def _safe_log_text(value: Any, maximum: int = 2048) -> str:
 
 
 def _caller_identity(scope: dict[str, Any]) -> str:
-    raw_key = b""
-    for name, value in scope.get("headers", []):
-        if name.lower() == KEY_HEADER.encode("ascii"):
-            raw_key = value.strip()
-    if raw_key:
-        fingerprint = hashlib.sha256(raw_key).hexdigest()[:12]
+    raw_keys = [
+        value.strip()
+        for name, value in scope.get("headers", [])
+        if name.lower() == KEY_HEADER.encode("ascii")
+    ]
+    if len(raw_keys) == 1 and raw_keys[0]:
+        fingerprint = hashlib.sha256(raw_keys[0]).hexdigest()[:12]
         return f"api_key:{fingerprint}"
     if scope.get("session"):
         return "session"
@@ -1532,6 +1538,7 @@ def create_app():
             TASKS,
             _positive_integer_setting("task-concurrency", 1),
             LOGGER,
+            max_attempts=_positive_integer_setting("task-max-attempts", 3),
         )
         if task_store is not None
         else None
@@ -1592,13 +1599,13 @@ def create_app():
             'The "session-https-only" setting is off but "allowed-hosts" is not '
             "loopback-only; session cookies will travel unencrypted over HTTP."
         )
-    if store is None and any(
+    if any(
         (record["metadata"].get("limits") or {}).get("per-session")
         for record in ENDPOINTS
     ):
         LOGGER.warning(
-            'Signed-cookie sessions make "per-session" rate limits easy to '
-            'reset; configure "session-store" or prefer "per-client".'
+            'Anonymous clients can reset "per-session" rate limits by omitting '
+            'their session cookie; prefer "per-client" on anonymous endpoints.'
         )
     application = HostPolicyMiddleware(application, allowed_hosts)
     csp = CONFIG.get("content-security-policy")

@@ -12,6 +12,8 @@ from typing import Any
 from sykit._schema import migrate_schema
 
 DEFAULT_SQLITE_FILE = ".sykit-tasks.sqlite3"
+FAILED_RETENTION_SECONDS = 7 * 24 * 60 * 60
+CLEANUP_INTERVAL_SECONDS = 60 * 60
 STORE_METHODS = (
     "enqueue",
     "enqueue_scheduled",
@@ -100,6 +102,7 @@ class SqliteTaskStore(TaskStore):
         self.database_path = database_path
         self._schema_ready = False
         self._schema_lock = threading.Lock()
+        self._last_cleanup = 0.0
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=5)
@@ -200,6 +203,12 @@ class SqliteTaskStore(TaskStore):
         try:
             now = time.time()
             connection.execute("BEGIN IMMEDIATE")
+            if now - self._last_cleanup >= CLEANUP_INTERVAL_SECONDS:
+                connection.execute(
+                    "DELETE FROM sykit_tasks WHERE status = 'failed' AND finished <= ?",
+                    (now - FAILED_RETENTION_SECONDS,),
+                )
+                self._last_cleanup = now
             row = connection.execute(
                 "SELECT task_id, task_name, args, kwargs, attempts "
                 "FROM sykit_tasks "

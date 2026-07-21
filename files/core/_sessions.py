@@ -26,6 +26,7 @@ LOGGER = logging.getLogger("sykit.server")
 # store mode it makes the middleware issue a fresh session id so a login
 # cannot be fixated onto an id the client presented earlier.
 ROTATE_KEY = "__sykit_rotate"
+_INTERNAL_PREFIX = "__sykit_"
 
 DEFAULT_SQLITE_FILE = ".sykit-sessions.sqlite3"
 SESSION_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{16,128}")
@@ -283,11 +284,13 @@ class SessionMiddleware:
         cookie_value = self._cookie_value(scope)
         session: dict[str, Any] = {}
         session_id: str | None = None
+        accepted_cookie = False
         if cookie_value is not None:
             unsigned = self._unsign(cookie_value)
             if unsigned is not None:
                 if self.store is None:
                     session = _decode_session_payload(unsigned)
+                    accepted_cookie = True
                 else:
                     candidate = unsigned.decode("utf-8", "replace")
                     if SESSION_ID_PATTERN.fullmatch(candidate):
@@ -304,6 +307,7 @@ class SessionMiddleware:
                         if loaded:
                             session = loaded
                             session_id = candidate
+                            accepted_cookie = True
 
         scope["session"] = session
         had_cookie = cookie_value is not None
@@ -316,6 +320,7 @@ class SessionMiddleware:
                     message,
                     session_id,
                     had_cookie,
+                    accepted_cookie,
                     loaded_snapshot,
                 )
             await send(message)
@@ -328,10 +333,21 @@ class SessionMiddleware:
         message: dict[str, Any],
         session_id: str | None,
         had_cookie: bool,
+        accepted_cookie: bool,
         loaded_snapshot: str,
     ) -> None:
         session = scope["session"]
         rotate = bool(session.pop(ROTATE_KEY, False))
+
+        if (
+            not accepted_cookie
+            and session
+            and all(
+                isinstance(key, str) and key.startswith(_INTERNAL_PREFIX)
+                for key in session
+            )
+        ):
+            session.clear()
 
         if self.store is None:
             if session:

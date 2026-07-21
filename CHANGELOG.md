@@ -3,6 +3,17 @@
 All notable SyKit changes are listed here. Detailed release notes remain under
 `docs/changelogs/`.
 
+## 0.14.2 - 2026-07-21
+
+- Prevented anonymous rate-limit traffic from creating server-side session
+  rows and kept the per-session identity across login.
+- Capped task crash recovery attempts and payload size, and expired old failed
+  task records.
+- Rejected duplicate API key headers and removed long-lived caching from
+  permission-protected assets.
+- Hardened password-hash validation, Windows Node/npm resolution, generated
+  ignore files, and release security guidance.
+
 ## 0.14.1 - 2026-07-20
 
 - Fixed the unit-test matrix to install the development dependency lock.

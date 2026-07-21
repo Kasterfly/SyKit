@@ -36,7 +36,8 @@ identifiers and load current records inside the task. Request objects,
 `Upload` values, open files, and custom class instances cannot be persisted;
 avoid copying request-session state into a task even when its values happen to
 be JSON compatible. Queue payloads are not encrypted, so do not place secrets
-in task arguments unless the store protects them appropriately.
+in task arguments unless the store protects them appropriately. The encoded
+arguments and keyword arguments may be at most 1 MiB per call.
 
 Tasks may be synchronous or asynchronous. Synchronous functions run in a
 thread pool; asynchronous functions run on the server event loop and must not
@@ -83,15 +84,23 @@ idempotent, commonly by using a unique business record id.
 
 An exception from task code is logged and marks the call failed; it is not
 automatically retried. Process loss is different: an expired running lease is
-recovered automatically. The built-in sqlite store retains failed rows for
-diagnosis. Background failures have no request object and do not invoke the
-endpoint error hook.
+recovered automatically. `task-max-attempts` defaults to `3`; a call reclaimed
+after that many claims is marked failed instead of being run again. The
+built-in sqlite store retains failed rows for seven days for diagnosis, then
+deletes them during queue cleanup. Background failures have no request object
+and do not invoke the endpoint error hook.
 
 During graceful shutdown, schedulers stop and workers stop claiming new
 calls. The app then waits for every in-flight call to finish. Generated
 Compose files set `stop_grace_period: 1m`; increase the deployment platform's
 termination grace when legitimate tasks may run longer. A forced kill can
 interrupt a call, but its expired lease keeps the persisted call recoverable.
+
+There is no built-in task timeout. A task that hangs keeps renewing its lease,
+occupies one concurrency slot, and can block graceful shutdown. Use bounded
+network timeouts and cancellable operations inside tasks. If a process must be
+forcibly stopped, its call becomes recoverable after the lease expires and the
+attempt cap prevents an endless crash-recovery loop.
 
 ## Task stores
 

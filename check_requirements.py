@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -14,6 +15,47 @@ class RequirementError(RuntimeError):
 NODE_REQUIREMENT = "Node.js 22.12+ or 24.x"
 
 
+def _find_windows_executable(
+    command: str,
+    directories: list[str],
+    current_directory: Path,
+    path_extensions: str,
+) -> str | None:
+    try:
+        current = current_directory.resolve()
+    except OSError:
+        current = current_directory
+    suffixes = ("",)
+    if not Path(command).suffix:
+        suffixes = tuple(suffix for suffix in path_extensions.split(";") if suffix)
+    for raw_directory in directories:
+        if not raw_directory:
+            continue
+        try:
+            directory = Path(raw_directory).resolve()
+        except OSError:
+            continue
+        if directory == current:
+            continue
+        for suffix in suffixes:
+            candidate = directory / f"{command}{suffix}"
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    return None
+
+
+def find_executable(command: str) -> str | None:
+    """Resolve a PATH command without Windows' implicit current directory."""
+    if os.name != "nt":
+        return shutil.which(command)
+    return _find_windows_executable(
+        command,
+        os.get_exec_path(),
+        Path.cwd(),
+        os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD"),
+    )
+
+
 def parse_version(value: str) -> tuple[int, ...]:
     match = re.search(r"(\d+(?:\.\d+)+|\d+)", value)
     if not match:
@@ -22,7 +64,7 @@ def parse_version(value: str) -> tuple[int, ...]:
 
 
 def _node_version() -> str:
-    executable = shutil.which("node")
+    executable = find_executable("node")
     if not executable:
         raise RequirementError("Node.js was not found on PATH.")
     try:
@@ -85,6 +127,7 @@ __all__ = [
     "RequirementError",
     "NODE_REQUIREMENT",
     "check_requirements",
+    "find_executable",
     "parse_version",
     "validate_node_version",
 ]

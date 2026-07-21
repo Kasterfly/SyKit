@@ -14,6 +14,8 @@ from sykit import tasks as task_api
 
 DEFAULT_LEASE_SECONDS = 300
 DEFAULT_POLL_SECONDS = 0.25
+DEFAULT_MAX_ATTEMPTS = 3
+MAX_PAYLOAD_BYTES = 1_048_576
 
 
 def cron_matches(schedule: dict[str, Any], moment: datetime) -> bool:
@@ -45,6 +47,7 @@ class TaskManager:
         concurrency: int,
         logger,
         *,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         lease_seconds: int = DEFAULT_LEASE_SECONDS,
         poll_seconds: float = DEFAULT_POLL_SECONDS,
     ) -> None:
@@ -52,6 +55,7 @@ class TaskManager:
         self.records = records
         self.concurrency = concurrency
         self.logger = logger
+        self.max_attempts = max_attempts
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
         self._by_name = {record["metadata"]["id"]: record for record in self.records}
@@ -77,6 +81,12 @@ class TaskManager:
             raise TypeError(
                 "Background task arguments must be JSON serializable."
             ) from error
+        payload_bytes = len(encoded.encode("utf-8"))
+        if payload_bytes > MAX_PAYLOAD_BYTES:
+            raise ValueError(
+                "Background task arguments exceed the "
+                f"{MAX_PAYLOAD_BYTES}-byte payload limit."
+            )
         return payload["args"], payload["kwargs"]
 
     def enqueue(
@@ -156,6 +166,27 @@ class TaskManager:
                         "Could not release a background task claimed during shutdown."
                     )
                 return
+            attempt = job.get("attempt")
+            if isinstance(attempt, int) and attempt > self.max_attempts:
+                task_id = str(job.get("id", ""))
+                self.logger.error(
+                    "Background task %s exceeded the %d-attempt limit.",
+                    task_id,
+                    self.max_attempts,
+                )
+                try:
+                    await run_in_threadpool(
+                        self.store.fail,
+                        task_id,
+                        worker_id,
+                        f"Task exceeded the {self.max_attempts}-attempt limit.",
+                    )
+                except Exception:
+                    self.logger.exception(
+                        "Could not record attempt exhaustion for background task %s.",
+                        task_id,
+                    )
+                continue
             await self._run_job(job, worker_id)
 
     async def _heartbeat(

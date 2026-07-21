@@ -142,7 +142,9 @@ Request-rate caps support four scopes:
   resets. Clients behind one reverse proxy share a bucket unless Uvicorn is
   launched with proxy headers enabled for that trusted proxy.
 - `per-session`: one count per signed session cookie. A client can reset this
-  scope by clearing cookies.
+  scope by clearing or omitting cookies, even with a server-side session store.
+  Internal-only state is not persisted without a valid session cookie, so use
+  `per-client` for anonymous abuse protection.
 - `per-key`: one count per API key, so one caller cannot exhaust
   another's budget. Requires `@api_key` on the endpoint.
 - `site-wide`: one count shared by all workers and clients.

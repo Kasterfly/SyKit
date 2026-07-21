@@ -2,22 +2,59 @@
 
 > **Status:** the built-site findings were addressed in 0.12.2. The package,
 > remote-download, and self-update subsystems were reviewed for 0.13.0, and
-> the fail-open updater finding was fixed. SyKit 0.14.0 freezes the reviewed
-> compatibility and security behavior for its pre-1.0 soak.
+> the fail-open updater finding was fixed. The pre-1.0 runtime and CLI review
+> was completed for 0.14.2 and its actionable findings were patched.
 
-- **Project:** SyKit 0.14.0 (release-candidate beta)
+- **Project:** SyKit 0.14.2 (release-candidate beta)
 - **Scope:** `build.py`, the generated runtime under `files/`, the public
   `sykit/` package, `package.py`, `package_remote.py`, `package_analysis.py`,
   and `update.py`.
 - **Method:** manual data-flow and trust-boundary review, adversarial unit
   tests, a built-app browser flow through a reverse proxy, and a generated
   container start using locked dependencies.
-- **Result:** the updater's API-outage fallback was a release-blocking
-  supply-chain issue and is fixed in 0.13.0. No additional critical or high
-  issues were found in the package transaction, archive extraction, analysis,
-  or rollback paths. Historical built-site findings remain below.
+- **Result:** no critical or high issue was found in the 0.14.2 assessment.
+  Three medium and eight low runtime and build findings were addressed. The
+  package system's inherent trust model was excluded from this assessment and
+  remains documented below for maintainer review.
 
 ---
+
+## 0.14.2 runtime and build review
+
+The review traced anonymous session writes, background task recovery, tool
+resolution, request header handling, protected static files, password hash
+validation, and generated-file exclusions.
+
+Implemented controls:
+
+- Requests without a valid session cookie whose session contains only internal
+  SyKit values are not persisted. The runtime warns about anonymous
+  `per-session` limits in cookie and store modes, and login preserves the
+  current rate identity.
+- Recovered background calls stop after `task-max-attempts` claims, defaulting
+  to three. Queue payloads are limited to 1 MiB, and the built-in sqlite store
+  removes failed rows after seven days.
+- Windows Node.js and npm lookup searches explicit PATH directories while
+  skipping the current directory, including equivalent relative entries.
+- Duplicate `X-API-Key` headers are rejected with 400 before lookup. Access
+  logging fingerprints a key only when exactly one header is present.
+- Permission-protected static assets use `no-cache` instead of the immutable
+  public asset policy.
+- Stored scrypt hashes are rejected when their composite memory request or
+  derived-key size exceeds the verification bounds. Backend `ValueError`
+  failures are normalized to `AuthError`.
+- Successful builds add `built/` and `__sykitcache__/` to `.gitignore` when
+  missing. Generated `.dockerignore` files also exclude `.env` and the API key
+  sqlite database.
+
+Residual operational limits:
+
+- SyKit cannot safely terminate arbitrary Python task code. A hung call keeps
+  renewing its lease, occupies a concurrency slot, and delays graceful
+  shutdown. Task code must use bounded I/O and cooperative cancellation; the
+  behavior and forced-termination recovery are documented.
+- Installing a package remains equivalent to running trusted SyKit-level code.
+  That package-system trust model was outside the 0.14.2 assessment scope.
 
 ## 0.13.0 package and updater review
 
@@ -205,12 +242,17 @@ These were specifically probed or audited and held up:
 - **Request-body / upload limits:** dual enforcement (`Content-Length` pre-check + counted streaming) at `files/server.py:1214-1277`, per-endpoint multipart caps, disk-spooled temp files closed on all paths, and `max_upload_bytes <= max-request-bytes` enforced at build time.
 - **JSON hardening:** duplicate keys and `NaN`/`Infinity` rejected, recursion errors handled, strict content-type required.
 - **Sessions:** HMAC-signed cookies with enforced >=32-byte secret, id rotation + old-id deletion on `login()` in store mode (anti-fixation), expired-row cleanup, and 503 fail-closed when a configured store is down.
-- **Passwords:** scrypt with sane parameters, `hmac.compare_digest`, malformed-hash rejection (`sykit/auth.py`).
+- **Passwords:** scrypt with bounded composite memory and key length,
+  `hmac.compare_digest`, and malformed-hash rejection (`sykit/auth.py`).
 - **API keys:** only sha256 hashes stored, generation via `secrets`, scope checks fail closed.
 - **Host header policy:** strict allowlist with wildcard support that doesn't over-match (`*.example.com` vs `evil-example.com`), running before anything that trusts `Host`.
 - **Rate limiter internals:** transactional sqlite accounting with rollback on exceed (denied requests don't burn budget), per-window cleanup, per-client based on the direct peer (correct given `proxy_headers=False`).
 - **Rate limiting works when reached:** verified `200, 200, 429` with `Retry-After` on a `per-client` limit.
-- **Build hygiene:** no sourcemaps, `npm ci --ignore-scripts` with a pinned lockfile, reserved module names blocking stdlib/runtime shadowing, endpoint-path normalization rejecting `..`/control chars, `.dockerignore` excludes the sqlite state files, and Compose requires `SYKIT_SESSION_SECRET` rather than embedding it.
+- **Build hygiene:** no sourcemaps, `npm ci --ignore-scripts` with a pinned
+  lockfile, Windows PATH lookup that excludes the current directory, reserved
+  module names blocking stdlib/runtime shadowing, endpoint-path normalization
+  rejecting `..`/control chars, generated ignore files exclude secrets and
+  state, and Compose requires `SYKIT_SESSION_SECRET` rather than embedding it.
 
 ## Suggested production checklist
 

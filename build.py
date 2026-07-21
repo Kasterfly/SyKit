@@ -16,9 +16,13 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 try:
-    from .check_requirements import RequirementError, check_requirements
+    from .check_requirements import (
+        RequirementError,
+        check_requirements,
+        find_executable,
+    )
 except ImportError:
-    from check_requirements import RequirementError, check_requirements
+    from check_requirements import RequirementError, check_requirements, find_executable
 
 
 SRC_DIR = Path("src")
@@ -69,6 +73,7 @@ CONFIG_KEYS = frozenset(
         "sse-heartbeat-seconds",
         "sykit-folder-path",
         "task-concurrency",
+        "task-max-attempts",
         "task-store",
         "trust-proxy",
         "update-repo",
@@ -1767,9 +1772,9 @@ export default defineConfig({
 
 def _npm_command() -> str:
     if os.name == "nt":
-        command = shutil.which("npm.cmd")
+        command = find_executable("npm.cmd")
     else:
-        command = shutil.which("npm")
+        command = find_executable("npm")
     if not command:
         raise BuildError("npm was not found on PATH.")
     return command
@@ -1859,6 +1864,8 @@ def _copy_python_sources(destination: Path, sykit_dir: Path) -> None:
 DOCKERIGNORE = """\
 __pycache__/
 *.pyc
+.env
+.sykit-apikeys.sqlite3
 .sykit-limits.sqlite3
 .sykit-sessions.sqlite3
 .sykit-tasks.sqlite3
@@ -1983,6 +1990,35 @@ def _ensure_gitignore_env() -> None:
             file.write("\n")
         file.write(".env\n")
     print("Added .env to .gitignore.")
+
+
+def _ensure_gitignore_build_outputs() -> None:
+    try:
+        existing = (
+            GITIGNORE_PATH.read_text(encoding="utf-8")
+            if GITIGNORE_PATH.is_file()
+            else ""
+        )
+    except OSError:
+        return
+    entries = {line.strip() for line in existing.splitlines()}
+    missing = []
+    if not entries & {"built", "built/", "/built", "/built/"}:
+        missing.append("built/")
+    if not entries & {
+        "__sykitcache__",
+        "__sykitcache__/",
+        "/__sykitcache__",
+        "/__sykitcache__/",
+    }:
+        missing.append("__sykitcache__/")
+    if not missing:
+        return
+    with GITIGNORE_PATH.open("a", encoding="utf-8") as file:
+        if existing and not existing.endswith("\n"):
+            file.write("\n")
+        file.write("".join(f"{entry}\n" for entry in missing))
+    print("Added generated build paths to .gitignore.")
 
 
 def _dotenv_provides_secret() -> bool:
@@ -2111,6 +2147,7 @@ def run(dev: bool = False) -> bool:
         port = config.get("host-port", 8000)
         workers = config.get("workers", 1)
         task_concurrency = config.get("task-concurrency", 1)
+        task_max_attempts = config.get("task-max-attempts", 3)
         sse_heartbeat_seconds = config.get("sse-heartbeat-seconds", 15)
         max_request_bytes = config.get("max-request-bytes", 1_048_576)
         session_max_age = config.get("session-max-age", 1209600)
@@ -2118,6 +2155,7 @@ def run(dev: bool = False) -> bool:
             ("host-port", port),
             ("workers", workers),
             ("task-concurrency", task_concurrency),
+            ("task-max-attempts", task_max_attempts),
             ("sse-heartbeat-seconds", sse_heartbeat_seconds),
             ("max-request-bytes", max_request_bytes),
             ("session-max-age", session_max_age),
@@ -2128,6 +2166,8 @@ def run(dev: bool = False) -> bool:
             raise BuildError('"workers" must be at least 1.')
         if task_concurrency < 1:
             raise BuildError('"task-concurrency" must be at least 1.')
+        if task_max_attempts < 1:
+            raise BuildError('"task-max-attempts" must be at least 1.')
         if sse_heartbeat_seconds < 1:
             raise BuildError('"sse-heartbeat-seconds" must be at least 1.')
         if not 1 <= port <= 65535:
@@ -2205,6 +2245,7 @@ def run(dev: bool = False) -> bool:
             _safe_remove(CACHE_DIR)
         if use_dotenv:
             _ensure_env_files()
+        _ensure_gitignore_build_outputs()
         print(f"Build complete: {BUILT_DIR.resolve()}")
         if dev:
             return _run_dev_server(use_dotenv)
